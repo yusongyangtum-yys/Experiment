@@ -15,6 +15,22 @@ from mutagen.mp3 import MP3
 import time
 import io
 
+# --- 0. Javascript Hack for Audio Interruption (新加功能: 强制打断) ---
+# 每次脚本重新运行时（即用户发送消息时），这段JS会执行，立刻暂停所有正在播放的音频
+def stop_all_audio_js():
+    js_code = """
+        <script>
+            var audios = document.getElementsByTagName('audio');
+            for(var i = 0; i < audios.length; i++){
+                audios[i].pause();
+                audios[i].currentTime = 0;
+            }
+        </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+stop_all_audio_js() # 在脚本最顶端调用
+
 # --- 1. Configuration ---
 
 api_key_chatbot = st.secrets["OPENAI_API_KEY"]
@@ -26,24 +42,24 @@ except Exception as e:
     st.stop()
 
 MODEL = "gpt-4o-mini"
-# 修改：大幅增加 Token 限制，以允许 150-200 字的输出
-MAX_TOKENS = 800 
+MAX_TOKENS = 400 
 TEMPERATURE = 0.5   
 
-# --- TTS Voice Configuration ---
+# --- TTS Voice Configuration (修改: 语速调整) ---
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-GuyNeural"
+TTS_RATE = "+25%"  # <--- 语速加快 25%
 
-# --- Prompt Definitions (Modified) ---
+# --- Prompt Definitions ---
 SYSTEM_PROMPT_EMPATHY = (
     "You are Sophia, a supportive psychology teacher. Your goal is to teach 6 topics step-by-step: "
     "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types, "
     "4. Cognitive Biases, 5. Social Conformity, 6. Motivation Theory."
     "\n\n"
     "### IMPORTANT: LENGTH CONTROL"
-    "\n- **Keep every response Moderate (around 150-200 words).**"
-    "\n- Explain concepts clearly with examples."
-    "\n- If a concept is VERY complex, you may ask 'Are you following?' in the middle, but generally try to explain one concept fully."
+    "\n- **Keep every response SHORT (under 80 words).**"
+    "\n- If a concept is complex, explain the first half, then STOP and ask: 'Are you following so far?'"
+    "\n- Do NOT explain everything in one big chunk."
     "\n\n"
     "### INSTRUCTION FLOW:"
     "\n\n"
@@ -52,25 +68,27 @@ SYSTEM_PROMPT_EMPATHY = (
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
     "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
-    "1. **Teach ONE Concept**: Explain the concept fully (150-200 words).\n"
-    "2. **Check Understanding**: Ask 'Do you have any questions about this topic, or shall we move to the next one?'\n"
-    "3. **Transition**: If user says yes/ready, move to the NEXT topic. (NO INTERMEDIATE QUIZZES)."
+    "1. **Teach ONE Concept**: Explain the concept strictly following the LENGTH CONTROL rule.\n"
+    "2. **Stop & Ask**: Check understanding.\n"
+    "3. **Formative Test**: Present 1 multiple-choice question about the *current* concept.\n"
+    "4. **Feedback**: Wait for answer. If correct, praise. If incorrect, correct gently.\n"
+    "5. **Transition**: Ask if ready for the NEXT topic. Repeat until all 6 are done."
     "\n\n"
     "**PHASE 3: SUMMATIVE EXAM (Final Phase)**\n"
     "- Trigger this ONLY after all 6 topics are taught.\n"
-    "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 15 questions one by one.'\n"
-    "- **Action**: Present 15 multiple-choice questions one by one. Wait for the answer after each question.\n"
-    "- After the 15th question, show the total score and say 'The session is complete.'"
+    "- Say: 'Now, let's take the final exam. I will ask 6 questions one by one.'\n"
+    "- Ask questions one by one. After the last one, show total score and say 'The session is complete.'"
 )
 
 SYSTEM_PROMPT_NEUTRAL = (
     "You are a neutral, factual AI instructor teaching 6 Psychology topics. "
-    "Do not use emotional language. Do not praise. Be concise but thorough."
+    "Do not use emotional language. Do not praise. Be concise."
     "\n\n"
     "### LENGTH CONTROL"
-    "\n- **Keep responses Moderate (around 150-200 words).**"
+    "\n- **Keep responses SHORT (under 150 words).**"
+    "\n- If complex, split the explanation. Explain part 1, then ask 'Shall I continue?' before part 2."
     "\n\n"
-    "Follow the teaching flow: Intro -> 6 Topics (Teach -> Check Understanding -> Next) -> Final Exam (15 Questions)."
+    "Follow the teaching flow: Intro -> 6 Topics (Teach-Test-Feedback) -> Final Exam."
 )
 
 # --- 2. Helper Functions ---
@@ -120,11 +138,12 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 3. TTS Logic (Modified for Interruption) ---
+# --- 3. TTS Logic (Updated for Speed & Non-blocking) ---
 
 async def edge_tts_generate(text, voice):
-    """异步生成音频"""
-    communicate = edge_tts.Communicate(text, voice)
+    """异步生成音频，增加语速参数"""
+    # 这里添加了 rate 参数来加快语速
+    communicate = edge_tts.Communicate(text, voice, rate=TTS_RATE)
     audio_data = b""
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -133,21 +152,19 @@ async def edge_tts_generate(text, voice):
 
 def play_audio_full(text, mode_selection):
     """
-    新策略：
-    1. 生成音频并立即播放。
-    2. 不使用 sleep 阻塞。
-    3. 如果用户在播放期间打字并回车，页面刷新会自动销毁旧的 audio 标签，实现打断效果。
+    修正后的播放逻辑：
+    1. 移除 time.sleep (消除阻塞)
+    2. 生成音频并自动播放
     """
     if not text.strip():
         return
         
     voice = VOICE_EMPATHY if mode_selection == "Empathy Mode" else VOICE_NEUTRAL
-    
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
     try:
-        # 使用 spinner 只是为了告诉用户“正在准备声音”，准备好后立即消失
-        with st.spinner("🔊 Generating voice..."):
+        # 显示生成状态，但尽量快
+        with st.spinner("🔊 Generating audio..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
         st.error(f"TTS Error: {e}")
@@ -157,16 +174,21 @@ def play_audio_full(text, mode_selection):
         return
 
     b64 = base64.b64encode(audio_bytes).decode()
+    
+    # 使用 autoplay 自动播放
+    # 移除了 time.sleep，这样代码会继续执行，输入框会立即可以交互
+    # 之前的音频会在浏览器中播放，直到用户输入触发 reload (stop_all_audio_js)
     md = f"""
-        <audio autoplay style="display:none;">
+        <audio autoplay style="display:none;" id="bot_audio">
         <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
     """
     
-    # 这里的关键是：我们渲染音频，但不清理它，也不等待它。
-    # 它会一直存在，直到下一次页面刷新（即用户输入新内容时）。
-    sound_placeholder = st.empty()
-    sound_placeholder.markdown(md, unsafe_allow_html=True)
+    # 使用一个固定的 container 来放置音频，每次覆盖更新
+    if "audio_container" not in st.session_state:
+        st.session_state.audio_container = st.empty()
+    
+    st.session_state.audio_container.markdown(md, unsafe_allow_html=True)
 
 # --- 4. Logic: Text First, Then Audio ---
 
@@ -184,7 +206,7 @@ def generate_text_and_speak(messages, chat_placeholder, mode_selection):
 
     full_response = ""
     
-    # 1. 文本生成阶段
+    # 1. 文本生成阶段 (流式显示)
     for chunk in stream:
         txt = chunk.choices[0].delta.content
         if txt:
@@ -195,6 +217,7 @@ def generate_text_and_speak(messages, chat_placeholder, mode_selection):
     chat_placeholder.markdown(full_response)
     
     # 2. 音频生成与播放阶段
+    # 注意：这里不再阻塞等待音频播完
     play_audio_full(full_response, mode_selection)
 
     return full_response
@@ -203,6 +226,7 @@ def reset_experiment():
     st.session_state.display_history = []
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
+    st.session_state.audio_container = st.empty() # Reset audio container
     mode = st.session_state.get("mode_selection", "Empathy Mode")
     prompt = SYSTEM_PROMPT_EMPATHY if mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
     st.session_state.messages = [{"role": "system", "content": prompt}]
@@ -296,6 +320,7 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
+    # 渲染聊天记录
     with chat_container:
         for msg in st.session_state.display_history:
             avatar = "👩‍🏫" if msg["role"] == "assistant" else "👤"
@@ -322,9 +347,12 @@ with col_chat:
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
         # B. User Input Logic
+        # 移除了 time.sleep 后，这个输入框会立刻出现
         user_input = st.chat_input("Type your response here...")
         
         if user_input:
+            # 用户一旦输入，脚本Rerun，顶部的JS会停止之前的音频
+            
             with chat_container:
                 st.chat_message("user", avatar="👤").write(user_input)
                 st.session_state.display_history.append({"role": "user", "content": user_input})
