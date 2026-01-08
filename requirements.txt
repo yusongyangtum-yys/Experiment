@@ -1,0 +1,8 @@
+streamlit
+openai
+gspread
+google-auth
+edge-tts
+mutagen
+pandas
+requests
