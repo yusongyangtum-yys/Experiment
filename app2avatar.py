@@ -32,12 +32,12 @@ TEMPERATURE = 0.5
 VOICE_EMPATHY = "en-US-AnaNeural" 
 
 # Neutral Mode: 严肃男声 (Christopher)
-# 确保两个模式声音区别巨大
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
 TTS_RATE = "+25%" 
 
-# --- Prompt Definitions ---
+# --- Prompt Definitions (CRITICAL UPDATE HERE) ---
+
 SYSTEM_PROMPT_EMPATHY = (
     "You are Sophia, a supportive psychology teacher. Your goal is to teach 6 topics step-by-step: "
     "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types, "
@@ -62,10 +62,14 @@ SYSTEM_PROMPT_EMPATHY = (
     "**PHASE 3: SUMMATIVE EXAM (Final Phase)**\n"
     "- Trigger this ONLY after all 6 topics are taught.\n"
     "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 15 questions one by one.'\n"
-    "- **Action**: Present 15 multiple-choice questions one by one. Wait for the answer after each question.\n"
+    "- **Exam Rules**:\n"
+    "  1. Ask **ONE** multiple-choice question (Options A, B, C, D).\n"
+    "  2. **STOP** and wait for the user to answer.\n"
+    "  3. After user answers: Praise if correct, correct gently if wrong. Then ask the **NEXT** question.\n"
     "- After the 15th question, show the total score and say 'Thanks for the effort. The session is complete.'"
 )
 
+# 修改重点：显式要求 Multiple Choice，且必须 One-by-One
 SYSTEM_PROMPT_NEUTRAL = (
     "You are a neutral, factual AI instructor teaching 6 Psychology topics. "
     "Do not use emotional language. Do not praise. Be concise but thorough."
@@ -73,13 +77,33 @@ SYSTEM_PROMPT_NEUTRAL = (
     "### LENGTH CONTROL"
     "\n- **Keep responses Moderate (around 150-200 words).**"
     "\n\n"
-    "Follow the teaching flow: Intro -> 6 Topics (Teach -> Check Understanding -> Next) -> Final Exam (15 Questions)."
+    "### INSTRUCTION FLOW:"
+    "\n\n"
+    "**PHASE 1: INTRODUCTION**\n"
+    "- Briefly introduce yourself and list the 6 topics.\n"
+    "- Ask if the student is ready to begin Topic 1."
+    "\n\n"
+    "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
+    "1. **Teach ONE Concept**: Explain the concept strictly factually (150-200 words).\n"
+    "2. **Check Understanding**: Ask 'Do you have questions, or proceed to the next topic?'\n"
+    "3. **Transition**: If user agrees, move to the NEXT topic immediately."
+    "\n\n"
+    "**PHASE 3: FINAL EXAM (Strictly Multiple Choice)**\n"
+    "- Trigger this ONLY after Topic 6 is finished.\n"
+    "- Say: 'We will now begin the final exam consisting of 15 multiple-choice questions.'\n"
+    "- **Exam Protocol (Strictly Follow)**:\n"
+    "  1. Present **ONE** multiple-choice question related to the taught topics. Ensure it has options A, B, C, D.\n"
+    "  2. **STOP** generating text immediately. Do NOT ask the next question yet.\n"
+    "  3. **WAIT** for the user's input.\n"
+    "  4. **Feedback**: After the user answers, state 'Correct' or 'Incorrect' (neutral tone only). \n"
+    "  5. **Next Step**: Immediately present the **NEXT** question.\n"
+    "- Repeat this loop until 15 questions are completed.\n"
+    "- After Question 15, display the final score (e.g., Score: 12/15) and say 'The session is complete.'"
 )
 
 # --- 2. Javascript Hack (Clean previous audio) ---
 
 def stop_previous_audio():
-    # 强制清理浏览器中所有音频标签，防止声音重叠
     js_code = """
         <script>
             var audios = document.getElementsByTagName('audio');
@@ -155,22 +179,21 @@ def play_audio_full(text, active_mode):
     if not text.strip():
         return
         
-    # 这里不再读取 Radio 的值，而是读取“锁死”的 active_mode
+    # 读取 Locked Mode
     if active_mode == "Neutral Mode":
         voice = VOICE_NEUTRAL
-        icon = "👨‍🏫" # 男老师图标
+        icon = "👨‍🏫"
     else:
         voice = VOICE_EMPATHY
-        icon = "👩‍🏫" # 女老师图标
+        icon = "👩‍🏫"
     
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
-    # 清除旧容器
     if "audio_container" in st.session_state:
         st.session_state.audio_container.empty()
 
     try:
-        # Toast 提示，让你明确知道当前在用哪个声音
+        # 显示生成的 voice，确保一致
         st.toast(f"Speaking: {voice}", icon=icon)
         with st.spinner(f"🔊 Generating audio ({voice})..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
@@ -196,12 +219,10 @@ def play_audio_full(text, active_mode):
 # --- 5. Logic: Text First, Then Audio ---
 
 def handle_bot_response(user_input, chat_container, active_mode):
-    # 1. 记录用户输入
     if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
-        # 根据模式显示不同的头像 (可选优化)
         bot_avatar = "👨‍🏫" if active_mode == "Neutral Mode" else "👩‍🏫"
         
         with st.chat_message("assistant", avatar=bot_avatar):
@@ -228,7 +249,6 @@ def handle_bot_response(user_input, chat_container, active_mode):
             
             chat_placeholder.markdown(full_response)
             
-            # --- 关键：立刻保存历史 ---
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
@@ -236,7 +256,6 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
                 st.success("Session Data Saved.")
 
-            # 2. 最后生成音频，传入 active_mode
             play_audio_full(full_response, active_mode)
 
 def reset_experiment_logic():
@@ -244,11 +263,9 @@ def reset_experiment_logic():
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
-    # 重置时，同时也清空 active_mode
     if "active_mode" in st.session_state:
         del st.session_state.active_mode
     
-    # 默认回退到 Empathy Prompt
     st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT_EMPATHY}]
 
 # --- 6. Streamlit UI ---
@@ -277,9 +294,8 @@ if "subject_id" not in st.session_state:
     st.session_state.subject_id = ""
 if "experiment_started" not in st.session_state:
     st.session_state.experiment_started = False
-# 初始化 active_mode，防止报错
 if "active_mode" not in st.session_state:
-    st.session_state.active_mode = "Empathy Mode" # Default
+    st.session_state.active_mode = "Empathy Mode" 
 
 # --- Sidebar ---
 with st.sidebar:
@@ -293,12 +309,10 @@ with st.sidebar:
             if st.session_state.subject_id.strip():
                 st.session_state.experiment_started = True
                 
-                # --- CRITICAL FIX: HARD LOCK THE MODE ---
-                # 在点击开始的一瞬间，把 Radio 的值读取并锁死到 active_mode
+                # HARD LOCK MODE
                 selected = st.session_state.get("mode_selection", "Empathy Mode")
                 st.session_state.active_mode = selected
                 
-                # 设置 System Prompt
                 prompt = SYSTEM_PROMPT_EMPATHY if selected == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
                 st.session_state.messages = [{"role": "system", "content": prompt}]
                 
@@ -307,12 +321,11 @@ with st.sidebar:
                 st.error("⚠️ Enter Subject ID first.")
     else:
         st.success(f"Running: {st.session_state.subject_id}")
-        st.info(f"Mode: {st.session_state.active_mode}") # 显示当前锁定的模式
+        st.info(f"Mode: {st.session_state.active_mode}") 
     
     st.markdown("---")
     
     mode_disabled = st.session_state.experiment_started 
-    # 这里只负责 UI 交互，逻辑不再直接依赖这个 Radio 的实时返回值
     st.radio(
         "Select Teacher Style:",
         ["Empathy Mode", "Neutral Mode"],
@@ -354,22 +367,19 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
-    # 始终读取被锁定的 active_mode，而不是 Radio 的值
     locked_mode = st.session_state.active_mode
 
     with chat_container:
         for msg in st.session_state.display_history:
-            # 根据历史消息判断头像，或者简单点根据当前模式
             avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
             st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
     if st.session_state.experiment_started:
         
-        # A. Auto-Start Logic (First Run)
+        # A. Auto-Start Logic
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 关键：这里传入的是 locked_mode (即 active_mode)
             handle_bot_response("", chat_container, locked_mode)
 
         # B. User Input Logic
@@ -391,7 +401,6 @@ with col_chat:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
-                # 关键：始终传入 locked_mode
                 handle_bot_response(final_prompt, chat_container, locked_mode)
     
     else:
