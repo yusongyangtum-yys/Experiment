@@ -26,24 +26,24 @@ except Exception as e:
     st.stop()
 
 MODEL = "gpt-4o-mini"
-# 限制 Token 数量，配合 Prompt 控制长度
-MAX_TOKENS = 400 
+# 修改：大幅增加 Token 限制，以允许 150-200 字的输出
+MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
 # --- TTS Voice Configuration ---
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-GuyNeural"
 
-# --- Prompt Definitions ---
+# --- Prompt Definitions (Modified) ---
 SYSTEM_PROMPT_EMPATHY = (
     "You are Sophia, a supportive psychology teacher. Your goal is to teach 6 topics step-by-step: "
     "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types, "
     "4. Cognitive Biases, 5. Social Conformity, 6. Motivation Theory."
     "\n\n"
     "### IMPORTANT: LENGTH CONTROL"
-    "\n- **Keep every response SHORT (under 80 words).**"
-    "\n- If a concept is complex, explain the first half, then STOP and ask: 'Are you following so far?'"
-    "\n- Do NOT explain everything in one big chunk."
+    "\n- **Keep every response Moderate (around 150-200 words).**"
+    "\n- Explain concepts clearly with examples."
+    "\n- If a concept is VERY complex, you may ask 'Are you following?' in the middle, but generally try to explain one concept fully."
     "\n\n"
     "### INSTRUCTION FLOW:"
     "\n\n"
@@ -52,27 +52,25 @@ SYSTEM_PROMPT_EMPATHY = (
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
     "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
-    "1. **Teach ONE Concept**: Explain the concept strictly following the LENGTH CONTROL rule.\n"
-    "2. **Stop & Ask**: Check understanding.\n"
-    "3. **Formative Test**: Present 1 multiple-choice question about the *current* concept.\n"
-    "4. **Feedback**: Wait for answer. If correct, praise. If incorrect, correct gently.\n"
-    "5. **Transition**: Ask if ready for the NEXT topic. Repeat until all 6 are done."
+    "1. **Teach ONE Concept**: Explain the concept fully (150-200 words).\n"
+    "2. **Check Understanding**: Ask 'Do you have any questions about this topic, or shall we move to the next one?'\n"
+    "3. **Transition**: If user says yes/ready, move to the NEXT topic. (NO INTERMEDIATE QUIZZES)."
     "\n\n"
     "**PHASE 3: SUMMATIVE EXAM (Final Phase)**\n"
     "- Trigger this ONLY after all 6 topics are taught.\n"
-    "- Say: 'Now, let's take the final exam. I will ask 6 questions one by one.'\n"
-    "- Ask questions one by one. After the last one, show total score and say 'The session is complete.'"
+    "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 15 questions one by one.'\n"
+    "- **Action**: Present 15 multiple-choice questions one by one. Wait for the answer after each question.\n"
+    "- After the 15th question, show the total score and say 'The session is complete.'"
 )
 
 SYSTEM_PROMPT_NEUTRAL = (
     "You are a neutral, factual AI instructor teaching 6 Psychology topics. "
-    "Do not use emotional language. Do not praise. Be concise."
+    "Do not use emotional language. Do not praise. Be concise but thorough."
     "\n\n"
     "### LENGTH CONTROL"
-    "\n- **Keep responses SHORT (under 150 words).**"
-    "\n- If complex, split the explanation. Explain part 1, then ask 'Shall I continue?' before part 2."
+    "\n- **Keep responses Moderate (around 150-200 words).**"
     "\n\n"
-    "Follow the teaching flow: Intro -> 6 Topics (Teach-Test-Feedback) -> Final Exam."
+    "Follow the teaching flow: Intro -> 6 Topics (Teach -> Check Understanding -> Next) -> Final Exam (15 Questions)."
 )
 
 # --- 2. Helper Functions ---
@@ -122,7 +120,7 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 3. TTS Logic (Fixed) ---
+# --- 3. TTS Logic (Modified for Interruption) ---
 
 async def edge_tts_generate(text, voice):
     """异步生成音频"""
@@ -135,21 +133,20 @@ async def edge_tts_generate(text, voice):
 
 def play_audio_full(text, mode_selection):
     """
-    修正后的播放逻辑：
-    1. 接收完整文本
-    2. 生成完整音频
-    3. 计算音频准确时长
-    4. 阻塞等待直至播放结束，防止音频被截断
+    新策略：
+    1. 生成音频并立即播放。
+    2. 不使用 sleep 阻塞。
+    3. 如果用户在播放期间打字并回车，页面刷新会自动销毁旧的 audio 标签，实现打断效果。
     """
     if not text.strip():
         return
         
     voice = VOICE_EMPATHY if mode_selection == "Empathy Mode" else VOICE_NEUTRAL
     
-    # 简单的文本清理
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
     try:
+        # 使用 spinner 只是为了告诉用户“正在准备声音”，准备好后立即消失
         with st.spinner("🔊 Generating voice..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
@@ -159,18 +156,6 @@ def play_audio_full(text, mode_selection):
     if not audio_bytes:
         return
 
-    # --- 关键修正：准确计算时长 ---
-    try:
-        audio_stream = io.BytesIO(audio_bytes)
-        audio = MP3(audio_stream)
-        duration = audio.info.length
-    except Exception as e:
-        # 如果获取失败，估算一个较长的时长以防截断 (每秒约 2-3 个词)
-        duration = len(clean_text.split()) / 2.5 
-    
-    # 增加一点缓冲时间 (0.5秒) 确保尾音播完
-    sleep_time = duration + 0.5
-
     b64 = base64.b64encode(audio_bytes).decode()
     md = f"""
         <audio autoplay style="display:none;">
@@ -178,15 +163,10 @@ def play_audio_full(text, mode_selection):
         </audio>
     """
     
+    # 这里的关键是：我们渲染音频，但不清理它，也不等待它。
+    # 它会一直存在，直到下一次页面刷新（即用户输入新内容时）。
     sound_placeholder = st.empty()
     sound_placeholder.markdown(md, unsafe_allow_html=True)
-    
-    # --- 关键修正：必须等待播放完成 ---
-    # 如果不等待，sound_placeholder.empty() 会立即执行，导致浏览器移除音频标签，声音停止。
-    time.sleep(sleep_time) 
-    
-    # 播放完成后清理 HTML，以免下次重叠
-    sound_placeholder.empty()
 
 # --- 4. Logic: Text First, Then Audio ---
 
