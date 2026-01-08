@@ -27,12 +27,12 @@ MODEL = "gpt-4o-mini"
 MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
-# --- TTS Voice Configuration (Critical Fix) ---
-# Empathy: 温暖、亲切的女声 (Ana)
+# --- TTS Voice Configuration ---
+# Empathy Mode: 温暖女声 (Ana)
 VOICE_EMPATHY = "en-US-AnaNeural" 
 
-# Neutral: 为了确保你能听出区别，这里改为【男性】声音 (Christopher)
-# 这是一个冷静、平和、专业的男声。这样你就绝对不会混淆了。
+# Neutral Mode: 严肃男声 (Christopher)
+# 确保两个模式声音区别巨大
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
 TTS_RATE = "+25%" 
@@ -151,15 +151,17 @@ async def edge_tts_generate(text, voice):
             audio_data += chunk["data"]
     return audio_data
 
-def play_audio_full(text, mode_selection):
+def play_audio_full(text, active_mode):
     if not text.strip():
         return
         
-    # 强制选择逻辑
-    if mode_selection == "Empathy Mode":
-        voice = VOICE_EMPATHY
-    else:
+    # 这里不再读取 Radio 的值，而是读取“锁死”的 active_mode
+    if active_mode == "Neutral Mode":
         voice = VOICE_NEUTRAL
+        icon = "👨‍🏫" # 男老师图标
+    else:
+        voice = VOICE_EMPATHY
+        icon = "👩‍🏫" # 女老师图标
     
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
@@ -168,7 +170,8 @@ def play_audio_full(text, mode_selection):
         st.session_state.audio_container.empty()
 
     try:
-        # 显示当前使用的 Voice，方便调试
+        # Toast 提示，让你明确知道当前在用哪个声音
+        st.toast(f"Speaking: {voice}", icon=icon)
         with st.spinner(f"🔊 Generating audio ({voice})..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
@@ -192,13 +195,16 @@ def play_audio_full(text, mode_selection):
 
 # --- 5. Logic: Text First, Then Audio ---
 
-def handle_bot_response(user_input, chat_container, mode_selection):
+def handle_bot_response(user_input, chat_container, active_mode):
     # 1. 记录用户输入
     if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
-        with st.chat_message("assistant", avatar="👩‍🏫"):
+        # 根据模式显示不同的头像 (可选优化)
+        bot_avatar = "👨‍🏫" if active_mode == "Neutral Mode" else "👩‍🏫"
+        
+        with st.chat_message("assistant", avatar=bot_avatar):
             chat_placeholder = st.empty()
             
             try:
@@ -230,19 +236,20 @@ def handle_bot_response(user_input, chat_container, mode_selection):
                 save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
                 st.success("Session Data Saved.")
 
-            # 2. 最后生成音频
-            play_audio_full(full_response, mode_selection)
+            # 2. 最后生成音频，传入 active_mode
+            play_audio_full(full_response, active_mode)
 
 def reset_experiment_logic():
-    """手动调用的重置逻辑"""
     st.session_state.display_history = []
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
-    # 根据当前 radio 的选择来重置 prompt
-    mode = st.session_state.get("mode_selection", "Empathy Mode")
-    prompt = SYSTEM_PROMPT_EMPATHY if mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
-    st.session_state.messages = [{"role": "system", "content": prompt}]
+    # 重置时，同时也清空 active_mode
+    if "active_mode" in st.session_state:
+        del st.session_state.active_mode
+    
+    # 默认回退到 Empathy Prompt
+    st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT_EMPATHY}]
 
 # --- 6. Streamlit UI ---
 
@@ -270,6 +277,9 @@ if "subject_id" not in st.session_state:
     st.session_state.subject_id = ""
 if "experiment_started" not in st.session_state:
     st.session_state.experiment_started = False
+# 初始化 active_mode，防止报错
+if "active_mode" not in st.session_state:
+    st.session_state.active_mode = "Empathy Mode" # Default
 
 # --- Sidebar ---
 with st.sidebar:
@@ -281,12 +291,15 @@ with st.sidebar:
     if not st.session_state.experiment_started:
         if st.button("🚀 Start Experiment", type="primary"):
             if st.session_state.subject_id.strip():
-                # 只有在这里点击时，才设置 started = True
                 st.session_state.experiment_started = True
                 
-                # 初始化 System Prompt
-                current_mode = st.session_state.get("mode_selection", "Empathy Mode")
-                prompt = SYSTEM_PROMPT_EMPATHY if current_mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
+                # --- CRITICAL FIX: HARD LOCK THE MODE ---
+                # 在点击开始的一瞬间，把 Radio 的值读取并锁死到 active_mode
+                selected = st.session_state.get("mode_selection", "Empathy Mode")
+                st.session_state.active_mode = selected
+                
+                # 设置 System Prompt
+                prompt = SYSTEM_PROMPT_EMPATHY if selected == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
                 st.session_state.messages = [{"role": "system", "content": prompt}]
                 
                 st.rerun()
@@ -294,13 +307,12 @@ with st.sidebar:
                 st.error("⚠️ Enter Subject ID first.")
     else:
         st.success(f"Running: {st.session_state.subject_id}")
+        st.info(f"Mode: {st.session_state.active_mode}") # 显示当前锁定的模式
     
     st.markdown("---")
     
-    # 修复 BUG 的关键：
-    # 1. 移除了 on_change=reset_experiment，防止 Rerun 时自动重置
-    # 2. 禁用了 default value 的动态改变，完全依赖 key="mode_selection"
     mode_disabled = st.session_state.experiment_started 
+    # 这里只负责 UI 交互，逻辑不再直接依赖这个 Radio 的实时返回值
     st.radio(
         "Select Teacher Style:",
         ["Empathy Mode", "Neutral Mode"],
@@ -319,7 +331,6 @@ with st.sidebar:
         pd.DataFrame(data).to_csv("data.csv", index=False)
         st.write("CSV Saved locally (Simulation).")
 
-    # 只有点击这个红色按钮，才会重置
     if st.button("🔴 Reset Experiment"):
         reset_experiment_logic()
         st.rerun()
@@ -343,23 +354,23 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
-    # 获取当前的模式选择 (直接从 Session State 获取)
-    current_mode = st.session_state.get("mode_selection", "Empathy Mode")
+    # 始终读取被锁定的 active_mode，而不是 Radio 的值
+    locked_mode = st.session_state.active_mode
 
     with chat_container:
         for msg in st.session_state.display_history:
-            avatar = "👩‍🏫" if msg["role"] == "assistant" else "👤"
+            # 根据历史消息判断头像，或者简单点根据当前模式
+            avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
             st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
     if st.session_state.experiment_started:
         
-        # A. Auto-Start Logic (Triggered only once)
+        # A. Auto-Start Logic (First Run)
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
-            # 只在后台添加 trigger，不显示
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 触发回复
-            handle_bot_response("", chat_container, current_mode)
+            # 关键：这里传入的是 locked_mode (即 active_mode)
+            handle_bot_response("", chat_container, locked_mode)
 
         # B. User Input Logic
         user_input = st.chat_input("Type your response here...")
@@ -373,15 +384,15 @@ with col_chat:
                 sentiment_val = st.session_state.sentiment_counter.value
                 
                 system_instruction = ""
-                if current_mode == "Empathy Mode":
+                if locked_mode == "Empathy Mode":
                     if sentiment_val <= -2:
                         system_instruction = f"(System: User discouraged (Score {sentiment_val}). Be extra encouraging!) "
                     elif sentiment_val >= 2:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
-                # 传入 current_mode 确保使用了正确的音色
-                handle_bot_response(final_prompt, chat_container, current_mode)
+                # 关键：始终传入 locked_mode
+                handle_bot_response(final_prompt, chat_container, locked_mode)
     
     else:
         with chat_container:
