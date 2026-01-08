@@ -129,8 +129,7 @@ def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
         gc = gspread.authorize(credentials)
         
         # 3. 打开工作表
-        # 默认名为 Psychology_Experiment_Data，如果你在 secrets 里设了别名则用别名
-        sheet_name = st.secrets.get("sheet_name", "Psychology_Experiment_Data")
+        sheet_name = st.secrets.get("sheet_name", "Experiment_Data")
         try:
             sh = gc.open(sheet_name)
         except gspread.SpreadsheetNotFound:
@@ -143,7 +142,7 @@ def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
         history_json = json.dumps(chat_history, ensure_ascii=False)
         
         # 5. 写入行
-        row = [subject_id, timestamp, score_summary, history_json]
+        row = [subject_id, timestamp, score_summary]
         worksheet.append_row(row)
         
         return True, "Success"
