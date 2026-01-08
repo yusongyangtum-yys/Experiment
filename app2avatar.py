@@ -28,13 +28,8 @@ MAX_TOKENS = 800
 TEMPERATURE = 0.5   
 
 # --- TTS Voice Configuration ---
-# Empathy Mode: 温暖女声 (Ana)
 VOICE_EMPATHY = "en-US-AnaNeural" 
-
-# Neutral Mode: 严肃男声 (Christopher)
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
-
-# 注意：TTS_RATE 现在在 play_audio_full 函数中动态决定，不再使用全局变量
 
 # --- Prompt Definitions ---
 
@@ -69,7 +64,6 @@ SYSTEM_PROMPT_EMPATHY = (
     "- After the 15th question, show the total score and say 'Thanks for the effort. The session is complete.'"
 )
 
-# 修改：明确列出具体主题，防止 LLM 自由发挥；明确考试流程
 SYSTEM_PROMPT_NEUTRAL = (
     "You are a neutral, factual AI instructor. Your goal is to teach exactly these 6 specific Psychology topics: "
     "1. Classical Conditioning (Pavlov), 2. Operant Conditioning (Skinner), 3. Memory Types, "
@@ -103,10 +97,8 @@ SYSTEM_PROMPT_NEUTRAL = (
     "- After Question 15, display the final score and say 'The session is complete.'"
 )
 
-# --- 2. Javascript Hack (Clean previous audio) ---
-
+# --- 2. Javascript Hack ---
 def stop_previous_audio():
-    # 强制清理浏览器中所有音频标签，防止声音重叠
     js_code = """
         <script>
             var audios = document.getElementsByTagName('audio');
@@ -124,20 +116,36 @@ stop_previous_audio()
 # --- 3. Helper Functions ---
 
 def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
+    """保存数据到 Google Sheets，并返回详细错误信息以便调试"""
     try:
+        # 1. 检查 Secrets 是否存在
         if "gcp_service_account" not in st.secrets:
-            return False, "Secrets not configured"
+            return False, "Error: 'gcp_service_account' not found in st.secrets."
+        
+        # 2. 连接 Google Drive / Sheets
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(credentials)
+        
+        # 3. 打开工作表
+        # 默认名为 Psychology_Experiment_Data，如果你在 secrets 里设了别名则用别名
         sheet_name = st.secrets.get("sheet_name", "Psychology_Experiment_Data")
-        sh = gc.open(sheet_name)
+        try:
+            sh = gc.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            return False, f"Error: Spreadsheet '{sheet_name}' not found. Did you share it with the service account email?"
+
         worksheet = sh.sheet1
+        
+        # 4. 准备数据
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         history_json = json.dumps(chat_history, ensure_ascii=False)
+        
+        # 5. 写入行
         row = [subject_id, timestamp, score_summary, history_json]
         worksheet.append_row(row)
+        
         return True, "Success"
     except Exception as e:
         return False, str(e)
@@ -168,10 +176,9 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 4. TTS Logic (Updated for specific rates) ---
+# --- 4. TTS Logic ---
 
 async def edge_tts_generate(text, voice, rate):
-    """异步生成音频，接受特定的 rate 参数"""
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     audio_data = b""
     async for chunk in communicate.stream():
@@ -183,26 +190,22 @@ def play_audio_full(text, active_mode):
     if not text.strip():
         return
         
-    # 根据 active_mode 设置音色和语速
     if active_mode == "Neutral Mode":
         voice = VOICE_NEUTRAL
         icon = "👨‍🏫"
-        current_rate = "+10%" # Neutral 模式降速，防止男声过快含糊
+        current_rate = "+10%" 
     else:
         voice = VOICE_EMPATHY
         icon = "👩‍🏫"
-        current_rate = "+25%" # Empathy 模式保持较快语速
+        current_rate = "+25%" 
     
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
-    # 清除旧容器
     if "audio_container" in st.session_state:
         st.session_state.audio_container.empty()
 
     try:
-        # Toast 提示当前音色和语速，方便调试
         st.toast(f"Speaking: {voice} at {current_rate}", icon=icon)
-        
         with st.spinner(f"🔊 Generating audio ({voice})..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice, current_rate))
     except Exception as e:
@@ -224,15 +227,13 @@ def play_audio_full(text, active_mode):
     st.session_state.audio_container = st.empty()
     st.session_state.audio_container.markdown(md, unsafe_allow_html=True)
 
-# --- 5. Logic: Text First, Then Audio ---
+# --- 5. Logic ---
 
 def handle_bot_response(user_input, chat_container, active_mode):
-    # 1. 记录用户输入
     if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
-        # 根据模式显示不同的头像
         bot_avatar = "👨‍🏫" if active_mode == "Neutral Mode" else "👩‍🏫"
         
         with st.chat_message("assistant", avatar=bot_avatar):
@@ -259,15 +260,19 @@ def handle_bot_response(user_input, chat_container, active_mode):
             
             chat_placeholder.markdown(full_response)
             
-            # --- 关键：立刻保存历史 ---
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
+            # --- 自动保存触发逻辑 ---
+            # 如果检测到结束语，尝试保存
             if "session is complete" in full_response.lower():
-                save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
-                st.success("Session Data Saved.")
+                success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
+                if success:
+                    st.success("✅ Session Data Successfully Saved to Google Sheets!")
+                    st.balloons()
+                else:
+                    st.error(f"❌ Save Failed: {msg}")
 
-            # 2. 最后生成音频，传入 active_mode 以决定语速和音色
             play_audio_full(full_response, active_mode)
 
 def reset_experiment_logic():
@@ -275,10 +280,8 @@ def reset_experiment_logic():
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
-    # 清空锁定的模式
     if "active_mode" in st.session_state:
         del st.session_state.active_mode
-    
     st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT_EMPATHY}]
 
 # --- 6. Streamlit UI ---
@@ -321,15 +324,10 @@ with st.sidebar:
         if st.button("🚀 Start Experiment", type="primary"):
             if st.session_state.subject_id.strip():
                 st.session_state.experiment_started = True
-                
-                # --- HARD LOCK MODE ---
                 selected = st.session_state.get("mode_selection", "Empathy Mode")
                 st.session_state.active_mode = selected
-                
-                # Set Initial Prompt based on selection
                 prompt = SYSTEM_PROMPT_EMPATHY if selected == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
                 st.session_state.messages = [{"role": "system", "content": prompt}]
-                
                 st.rerun()
             else:
                 st.error("⚠️ Enter Subject ID first.")
@@ -348,15 +346,30 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    if st.button("Download CSV (Backup)"):
-        data = {
-            "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
-            "Role": [m["role"] for m in st.session_state.display_history],
-            "Content": [m["content"] for m in st.session_state.display_history],
-            "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * len(st.session_state.display_history)
-        }
-        pd.DataFrame(data).to_csv("data.csv", index=False)
-        st.write("CSV Saved locally (Simulation).")
+    
+    # 修复：使用 download_button 实现真正的文件下载
+    # 准备 CSV 数据
+    csv_data = pd.DataFrame({
+        "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
+        "Role": [m["role"] for m in st.session_state.display_history],
+        "Content": [m["content"] for m in st.session_state.display_history],
+        "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * len(st.session_state.display_history)
+    }).to_csv(index=False).encode('utf-8')
+
+    st.download_button(
+        label="📥 Download CSV (Backup)",
+        data=csv_data,
+        file_name=f"data_{st.session_state.subject_id}.csv",
+        mime="text/csv"
+    )
+
+    # 新增：手动强制保存到 Google Sheets 按钮
+    if st.button("☁️ Force Save to Sheets"):
+        success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Manual Save")
+        if success:
+            st.success("Saved!")
+        else:
+            st.error(f"Failed: {msg}")
 
     if st.button("🔴 Reset Experiment"):
         reset_experiment_logic()
@@ -380,26 +393,20 @@ if glb_data:
 
 with col_chat:
     chat_container = st.container(height=520)
-    
-    # 始终读取 locked_mode
     locked_mode = st.session_state.active_mode
 
     with chat_container:
         for msg in st.session_state.display_history:
-            # 根据 locked_mode 决定头像
             avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
             st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
     if st.session_state.experiment_started:
         
-        # A. Auto-Start Logic
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 传递 locked_mode
             handle_bot_response("", chat_container, locked_mode)
 
-        # B. User Input Logic
         user_input = st.chat_input("Type your response here...")
         
         if user_input:
@@ -418,9 +425,7 @@ with col_chat:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
-                # 传递 locked_mode
                 handle_bot_response(final_prompt, chat_container, locked_mode)
-    
     else:
         with chat_container:
             st.info("👈 Please enter your Subject ID in the sidebar and click 'Start Experiment' to begin.")
