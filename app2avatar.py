@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 import asyncio
 import edge_tts
 import time
-import uuid # 新增：用于生成唯一ID
+import uuid 
 
 # --- 1. Configuration ---
 
@@ -28,9 +28,14 @@ MODEL = "gpt-4o-mini"
 MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
-# --- TTS Voice Configuration ---
+# --- TTS Voice Configuration (修改了这里) ---
+# Empathy: 温暖、亲切的女声
 VOICE_EMPATHY = "en-US-AnaNeural" 
-VOICE_NEUTRAL = "en-US-GuyNeural"
+
+# Neutral: 严肃、专业、低沉的女声 (Michelle)
+# 如果想要男声（教授感），可以改为 "en-US-ChristopherNeural"
+VOICE_NEUTRAL = "en-US-MichelleNeural" 
+
 TTS_RATE = "+25%" 
 
 # --- Prompt Definitions ---
@@ -72,23 +77,22 @@ SYSTEM_PROMPT_NEUTRAL = (
     "Follow the teaching flow: Intro -> 6 Topics (Teach -> Check Understanding -> Next) -> Final Exam (15 Questions)."
 )
 
-# --- 2. Javascript Hack (Fixing Issue 1: Interruption) ---
+# --- 2. Javascript Hack (Clean previous audio) ---
 
 def stop_previous_audio():
-    # 这个脚本不仅暂停，还移除所有的 audio 元素，确保没有残留
+    # 强制清理浏览器中所有音频标签，防止声音重叠
     js_code = """
         <script>
             var audios = document.getElementsByTagName('audio');
             for(var i = 0; i < audios.length; i++){
                 audios[i].pause();
                 audios[i].currentTime = 0;
-                audios[i].remove(); // 暴力移除，防止占位
+                audios[i].remove(); 
             }
         </script>
     """
     components.html(js_code, height=0, width=0)
 
-# 每次 Rerun 最开始就执行清理
 stop_previous_audio()
 
 # --- 3. Helper Functions ---
@@ -138,10 +142,9 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 4. TTS Logic (Fixing Issue 1: Audio Silence) ---
+# --- 4. TTS Logic ---
 
 async def edge_tts_generate(text, voice):
-    """异步生成音频，应用语速参数"""
     communicate = edge_tts.Communicate(text, voice, rate=TTS_RATE)
     audio_data = b""
     async for chunk in communicate.stream():
@@ -150,22 +153,26 @@ async def edge_tts_generate(text, voice):
     return audio_data
 
 def play_audio_full(text, mode_selection):
-    """
-    修改逻辑：使用唯一 ID 强制浏览器刷新音频
-    """
     if not text.strip():
         return
         
-    voice = VOICE_EMPATHY if mode_selection == "Empathy Mode" else VOICE_NEUTRAL
+    # 严格的逻辑判断
+    if mode_selection == "Empathy Mode":
+        voice = VOICE_EMPATHY
+    else:
+        voice = VOICE_NEUTRAL
+    
+    # Debug: 让你在界面右下角看到当前到底用了哪个声音
+    st.toast(f"Generating audio using: **{voice}**", icon="🎙️")
+
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
-    # 1. 立即清除上一个音频容器（如果有）
+    # 清除旧容器
     if "audio_container" in st.session_state:
         st.session_state.audio_container.empty()
 
     try:
-        # 即使这里还在转圈，如果用户打断，下面的代码就不会执行，状态在外面已经保存了
-        with st.spinner("🔊 Generating audio..."):
+        with st.spinner("🔊 Generating voice..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
         st.error(f"TTS Error: {e}")
@@ -175,9 +182,7 @@ def play_audio_full(text, mode_selection):
         return
 
     b64 = base64.b64encode(audio_bytes).decode()
-    
-    # IMPORTANT FIX: 生成唯一的 div ID，强制浏览器认为是新内容
-    unique_id = f"audio_{uuid.uuid4()}"
+    unique_id = f"audio_{uuid.uuid4()}" # 唯一ID，强制刷新
     
     md = f"""
         <audio autoplay="true" style="display:none;" id="{unique_id}">
@@ -185,25 +190,16 @@ def play_audio_full(text, mode_selection):
         </audio>
     """
     
-    # 重新创建一个容器
     st.session_state.audio_container = st.empty()
     st.session_state.audio_container.markdown(md, unsafe_allow_html=True)
 
-# --- 5. Logic: Text and State Management (Fixing Issue 2: Repetition) ---
+# --- 5. Logic: Text First, Then Audio ---
 
 def handle_bot_response(user_input, chat_container, mode_selection):
-    """
-    核心逻辑重构：
-    1. 显示用户输入
-    2. 生成 LLM 文本
-    3. 【立刻】保存 LLM 文本到 Session State (防止打断后丢失导致重复)
-    4. 最后才生成音频
-    """
+    # 1. 记录用户输入
+    if user_input: # 仅当有输入时添加，避免空触发
+        st.session_state.messages.append({"role": "user", "content": user_input})
     
-    # 1. Append User Input to internal messages
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    
-    # 2. Start Generating Bot Response
     with chat_container:
         with st.chat_message("assistant", avatar="👩‍🏫"):
             chat_placeholder = st.empty()
@@ -229,21 +225,16 @@ def handle_bot_response(user_input, chat_container, mode_selection):
             
             chat_placeholder.markdown(full_response)
             
-            # --- IMPORTANT FIX: SAVE STATE HERE ---
-            # 文本生成一旦完成，立刻保存到历史记录。
-            # 这样，即使紧接着的音频生成被打断，LLM 也“记住”了它已经说过这句话。
+            # --- 关键：立刻保存历史，防止被音频打断丢失 ---
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
-            # Check for completion to save data
             if "session is complete" in full_response.lower():
                 save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
                 st.success("Session Data Saved.")
 
-            # 3. Generate & Play Audio (Last Step)
-            # 如果用户在这期间输入，Script 停止，但上面的 append 已经执行，所以不会重复。
+            # 2. 最后生成音频
             play_audio_full(full_response, mode_selection)
-
 
 def reset_experiment():
     st.session_state.display_history = []
@@ -300,6 +291,7 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # 这里的 key="mode_selection" 会自动更新 st.session_state.mode_selection
     mode_disabled = st.session_state.experiment_started 
     mode_selection = st.radio(
         "Select Teacher Style:",
@@ -343,7 +335,6 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
-    # 渲染历史记录
     with chat_container:
         for msg in st.session_state.display_history:
             avatar = "👩‍🏫" if msg["role"] == "assistant" else "👤"
@@ -351,13 +342,11 @@ with col_chat:
 
     if st.session_state.experiment_started:
         
-        # A. Auto-Start Logic
+        # A. Auto-Start Logic (Triggered only once)
         if len(st.session_state.display_history) == 0:
-            # 触发开场白
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
-            # 手动注入 context 到 messages
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 调用处理函数（不作为 User Input，而是系统触发）
+            # 这里传入空字符串，只触发机器人的第一句话
             handle_bot_response("", chat_container, mode_selection)
 
         # B. User Input Logic
@@ -368,7 +357,6 @@ with col_chat:
                 st.chat_message("user", avatar="👤").write(user_input)
                 st.session_state.display_history.append({"role": "user", "content": user_input})
                 
-                # 情感分析 & Prompt 调整
                 detect_sentiment(user_input)
                 sentiment_val = st.session_state.sentiment_counter.value
                 
@@ -379,12 +367,9 @@ with col_chat:
                     elif sentiment_val >= 2:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
-                # 组合最终输入
                 final_prompt = system_instruction + user_input
-                
-                # 调用处理核心
                 handle_bot_response(final_prompt, chat_container, mode_selection)
-
+    
     else:
         with chat_container:
             st.info("👈 Please enter your Subject ID in the sidebar and click 'Start Experiment' to begin.")
