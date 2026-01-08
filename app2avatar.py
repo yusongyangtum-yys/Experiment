@@ -11,26 +11,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 import asyncio
 import edge_tts
-from mutagen.mp3 import MP3
 import time
-import io
-
-# --- 0. Javascript Hack for Audio Interruption (新增功能: 强制打断) ---
-# 每次用户输入导致脚本重新运行时，这段代码会最先执行，停止之前的所有声音
-def stop_all_audio_js():
-    js_code = """
-        <script>
-            var audios = document.getElementsByTagName('audio');
-            for(var i = 0; i < audios.length; i++){
-                audios[i].pause();
-                audios[i].currentTime = 0;
-            }
-        </script>
-    """
-    # height=0 隐藏组件
-    components.html(js_code, height=0, width=0)
-
-stop_all_audio_js() # <--- 在此调用，确保由 rerun 触发
+import uuid # 新增：用于生成唯一ID
 
 # --- 1. Configuration ---
 
@@ -46,10 +28,10 @@ MODEL = "gpt-4o-mini"
 MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
-# --- TTS Voice Configuration (修改: 语速调整) ---
+# --- TTS Voice Configuration ---
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-GuyNeural"
-TTS_RATE = "+25%"  # <--- 修改这里可以调整语速 (例如: +20%, +50%)
+TTS_RATE = "+25%" 
 
 # --- Prompt Definitions ---
 SYSTEM_PROMPT_EMPATHY = (
@@ -90,7 +72,26 @@ SYSTEM_PROMPT_NEUTRAL = (
     "Follow the teaching flow: Intro -> 6 Topics (Teach -> Check Understanding -> Next) -> Final Exam (15 Questions)."
 )
 
-# --- 2. Helper Functions ---
+# --- 2. Javascript Hack (Fixing Issue 1: Interruption) ---
+
+def stop_previous_audio():
+    # 这个脚本不仅暂停，还移除所有的 audio 元素，确保没有残留
+    js_code = """
+        <script>
+            var audios = document.getElementsByTagName('audio');
+            for(var i = 0; i < audios.length; i++){
+                audios[i].pause();
+                audios[i].currentTime = 0;
+                audios[i].remove(); // 暴力移除，防止占位
+            }
+        </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+# 每次 Rerun 最开始就执行清理
+stop_previous_audio()
+
+# --- 3. Helper Functions ---
 
 def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
     try:
@@ -137,11 +138,10 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 3. TTS Logic (Modified: Speed & Interruption) ---
+# --- 4. TTS Logic (Fixing Issue 1: Audio Silence) ---
 
 async def edge_tts_generate(text, voice):
     """异步生成音频，应用语速参数"""
-    # 关键修改：加入了 rate=TTS_RATE
     communicate = edge_tts.Communicate(text, voice, rate=TTS_RATE)
     audio_data = b""
     async for chunk in communicate.stream():
@@ -151,10 +151,7 @@ async def edge_tts_generate(text, voice):
 
 def play_audio_full(text, mode_selection):
     """
-    修改逻辑：
-    1. 生成音频。
-    2. 使用 HTML autoplay 播放。
-    3. 不阻塞，允许用户立刻输入。
+    修改逻辑：使用唯一 ID 强制浏览器刷新音频
     """
     if not text.strip():
         return
@@ -162,8 +159,12 @@ def play_audio_full(text, mode_selection):
     voice = VOICE_EMPATHY if mode_selection == "Empathy Mode" else VOICE_NEUTRAL
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
+    # 1. 立即清除上一个音频容器（如果有）
+    if "audio_container" in st.session_state:
+        st.session_state.audio_container.empty()
+
     try:
-        # Spinner 仅用于生成过程，生成极快
+        # 即使这里还在转圈，如果用户打断，下面的代码就不会执行，状态在外面已经保存了
         with st.spinner("🔊 Generating audio..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
@@ -175,62 +176,85 @@ def play_audio_full(text, mode_selection):
 
     b64 = base64.b64encode(audio_bytes).decode()
     
-    # 给 audio 标签加一个 id，方便 JS 控制（虽然全局暂停更暴力有效）
+    # IMPORTANT FIX: 生成唯一的 div ID，强制浏览器认为是新内容
+    unique_id = f"audio_{uuid.uuid4()}"
+    
     md = f"""
-        <audio autoplay style="display:none;" id="bot_audio_player">
+        <audio autoplay="true" style="display:none;" id="{unique_id}">
         <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
     """
     
-    # 使用 session_state 管理音频容器，确保每次只存在一个音频实例
-    if "audio_container" not in st.session_state:
-        st.session_state.audio_container = st.empty()
-    
-    # 渲染音频 -> 浏览器开始自动播放
+    # 重新创建一个容器
+    st.session_state.audio_container = st.empty()
     st.session_state.audio_container.markdown(md, unsafe_allow_html=True)
 
-# --- 4. Logic: Text First, Then Audio ---
+# --- 5. Logic: Text and State Management (Fixing Issue 2: Repetition) ---
 
-def generate_text_and_speak(messages, chat_placeholder, mode_selection):
-    try:
-        stream = client.chat.completions.create(
-            model=MODEL,
-            messages=enforce_token_budget(messages),
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            stream=True,
-        )
-    except Exception as e:
-        return f"API Error: {e}"
+def handle_bot_response(user_input, chat_container, mode_selection):
+    """
+    核心逻辑重构：
+    1. 显示用户输入
+    2. 生成 LLM 文本
+    3. 【立刻】保存 LLM 文本到 Session State (防止打断后丢失导致重复)
+    4. 最后才生成音频
+    """
+    
+    # 1. Append User Input to internal messages
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    
+    # 2. Start Generating Bot Response
+    with chat_container:
+        with st.chat_message("assistant", avatar="👩‍🏫"):
+            chat_placeholder = st.empty()
+            
+            try:
+                stream = client.chat.completions.create(
+                    model=MODEL,
+                    messages=enforce_token_budget(st.session_state.messages),
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                    stream=True,
+                )
+            except Exception as e:
+                st.error(f"API Error: {e}")
+                return
 
-    full_response = ""
-    
-    # 1. 文本生成阶段 (流式)
-    for chunk in stream:
-        txt = chunk.choices[0].delta.content
-        if txt:
-            full_response += txt
-            chat_placeholder.markdown(full_response + "▌")
-    
-    # 完成文本显示
-    chat_placeholder.markdown(full_response)
-    
-    # 2. 音频生成与播放阶段
-    # 完全移除了 sleep，生成完立刻返回，UI 解锁
-    play_audio_full(full_response, mode_selection)
+            full_response = ""
+            for chunk in stream:
+                txt = chunk.choices[0].delta.content
+                if txt:
+                    full_response += txt
+                    chat_placeholder.markdown(full_response + "▌")
+            
+            chat_placeholder.markdown(full_response)
+            
+            # --- IMPORTANT FIX: SAVE STATE HERE ---
+            # 文本生成一旦完成，立刻保存到历史记录。
+            # 这样，即使紧接着的音频生成被打断，LLM 也“记住”了它已经说过这句话。
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            st.session_state.display_history.append({"role": "assistant", "content": full_response})
+            
+            # Check for completion to save data
+            if "session is complete" in full_response.lower():
+                save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
+                st.success("Session Data Saved.")
 
-    return full_response
+            # 3. Generate & Play Audio (Last Step)
+            # 如果用户在这期间输入，Script 停止，但上面的 append 已经执行，所以不会重复。
+            play_audio_full(full_response, mode_selection)
+
 
 def reset_experiment():
     st.session_state.display_history = []
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
-    st.session_state.audio_container = st.empty() # Reset audio
+    st.session_state.audio_container = st.empty()
     mode = st.session_state.get("mode_selection", "Empathy Mode")
     prompt = SYSTEM_PROMPT_EMPATHY if mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
     st.session_state.messages = [{"role": "system", "content": prompt}]
 
-# --- 5. Streamlit UI ---
+# --- 6. Streamlit UI ---
 
 YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
 LOCAL_GLB_PATH = "cached_model.glb"
@@ -319,6 +343,7 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
+    # 渲染历史记录
     with chat_container:
         for msg in st.session_state.display_history:
             avatar = "👩‍🏫" if msg["role"] == "assistant" else "👤"
@@ -328,32 +353,22 @@ with col_chat:
         
         # A. Auto-Start Logic
         if len(st.session_state.display_history) == 0:
-            with chat_container:
-                with st.chat_message("assistant", avatar="👩‍🏫"):
-                    chat_placeholder = st.empty()
-                    
-                    trigger_msg = {"role": "system", "content": "The student has logged in. Please start Phase 1: Introduction now."}
-                    st.session_state.messages.append(trigger_msg)
-                    
-                    full_response = generate_text_and_speak(
-                        st.session_state.messages, 
-                        chat_placeholder, 
-                        mode_selection
-                    )
-                    
-                    st.session_state.display_history.append({"role": "assistant", "content": full_response})
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+            # 触发开场白
+            trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
+            # 手动注入 context 到 messages
+            st.session_state.messages.append({"role": "system", "content": trigger_msg})
+            # 调用处理函数（不作为 User Input，而是系统触发）
+            handle_bot_response("", chat_container, mode_selection)
 
         # B. User Input Logic
-        # 这个输入框现在始终是可用的（因为我们移除了 blocking sleep）
         user_input = st.chat_input("Type your response here...")
         
         if user_input:
-            # 当用户按回车，脚本 rerun -> 执行顶部的 stop_all_audio_js -> 声音立刻停止
             with chat_container:
                 st.chat_message("user", avatar="👤").write(user_input)
                 st.session_state.display_history.append({"role": "user", "content": user_input})
                 
+                # 情感分析 & Prompt 调整
                 detect_sentiment(user_input)
                 sentiment_val = st.session_state.sentiment_counter.value
                 
@@ -364,24 +379,12 @@ with col_chat:
                     elif sentiment_val >= 2:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
-                st.session_state.messages.append({"role": "user", "content": system_instruction + user_input})
+                # 组合最终输入
+                final_prompt = system_instruction + user_input
                 
-                with st.chat_message("assistant", avatar="👩‍🏫"):
-                    chat_placeholder = st.empty()
-                    
-                    full_response = generate_text_and_speak(
-                        st.session_state.messages, 
-                        chat_placeholder, 
-                        mode_selection
-                    )
-                    
-                    if "session is complete" in full_response.lower():
-                        save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
-                        st.success("Session Data Saved.")
-                
-                st.session_state.display_history.append({"role": "assistant", "content": full_response})
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-    
+                # 调用处理核心
+                handle_bot_response(final_prompt, chat_container, mode_selection)
+
     else:
         with chat_container:
             st.info("👈 Please enter your Subject ID in the sidebar and click 'Start Experiment' to begin.")
