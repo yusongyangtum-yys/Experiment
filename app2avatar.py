@@ -11,7 +11,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 import asyncio
 import edge_tts
-import time
 import uuid 
 
 # --- 1. Configuration ---
@@ -28,13 +27,13 @@ MODEL = "gpt-4o-mini"
 MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
-# --- TTS Voice Configuration (修改了这里) ---
-# Empathy: 温暖、亲切的女声
+# --- TTS Voice Configuration (Critical Fix) ---
+# Empathy: 温暖、亲切的女声 (Ana)
 VOICE_EMPATHY = "en-US-AnaNeural" 
 
-# Neutral: 严肃、专业、低沉的女声 (Michelle)
-# 如果想要男声（教授感），可以改为 "en-US-ChristopherNeural"
-VOICE_NEUTRAL = "en-US-MichelleNeural" 
+# Neutral: 为了确保你能听出区别，这里改为【男性】声音 (Christopher)
+# 这是一个冷静、平和、专业的男声。这样你就绝对不会混淆了。
+VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
 TTS_RATE = "+25%" 
 
@@ -156,15 +155,12 @@ def play_audio_full(text, mode_selection):
     if not text.strip():
         return
         
-    # 严格的逻辑判断
+    # 强制选择逻辑
     if mode_selection == "Empathy Mode":
         voice = VOICE_EMPATHY
     else:
         voice = VOICE_NEUTRAL
     
-    # Debug: 让你在界面右下角看到当前到底用了哪个声音
-    st.toast(f"Generating audio using: **{voice}**", icon="🎙️")
-
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
     # 清除旧容器
@@ -172,7 +168,8 @@ def play_audio_full(text, mode_selection):
         st.session_state.audio_container.empty()
 
     try:
-        with st.spinner("🔊 Generating voice..."):
+        # 显示当前使用的 Voice，方便调试
+        with st.spinner(f"🔊 Generating audio ({voice})..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
     except Exception as e:
         st.error(f"TTS Error: {e}")
@@ -182,7 +179,7 @@ def play_audio_full(text, mode_selection):
         return
 
     b64 = base64.b64encode(audio_bytes).decode()
-    unique_id = f"audio_{uuid.uuid4()}" # 唯一ID，强制刷新
+    unique_id = f"audio_{uuid.uuid4()}" 
     
     md = f"""
         <audio autoplay="true" style="display:none;" id="{unique_id}">
@@ -197,7 +194,7 @@ def play_audio_full(text, mode_selection):
 
 def handle_bot_response(user_input, chat_container, mode_selection):
     # 1. 记录用户输入
-    if user_input: # 仅当有输入时添加，避免空触发
+    if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
@@ -225,7 +222,7 @@ def handle_bot_response(user_input, chat_container, mode_selection):
             
             chat_placeholder.markdown(full_response)
             
-            # --- 关键：立刻保存历史，防止被音频打断丢失 ---
+            # --- 关键：立刻保存历史 ---
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
@@ -236,11 +233,13 @@ def handle_bot_response(user_input, chat_container, mode_selection):
             # 2. 最后生成音频
             play_audio_full(full_response, mode_selection)
 
-def reset_experiment():
+def reset_experiment_logic():
+    """手动调用的重置逻辑"""
     st.session_state.display_history = []
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
+    # 根据当前 radio 的选择来重置 prompt
     mode = st.session_state.get("mode_selection", "Empathy Mode")
     prompt = SYSTEM_PROMPT_EMPATHY if mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
     st.session_state.messages = [{"role": "system", "content": prompt}]
@@ -282,7 +281,14 @@ with st.sidebar:
     if not st.session_state.experiment_started:
         if st.button("🚀 Start Experiment", type="primary"):
             if st.session_state.subject_id.strip():
+                # 只有在这里点击时，才设置 started = True
                 st.session_state.experiment_started = True
+                
+                # 初始化 System Prompt
+                current_mode = st.session_state.get("mode_selection", "Empathy Mode")
+                prompt = SYSTEM_PROMPT_EMPATHY if current_mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
+                st.session_state.messages = [{"role": "system", "content": prompt}]
+                
                 st.rerun()
             else:
                 st.error("⚠️ Enter Subject ID first.")
@@ -291,13 +297,14 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 这里的 key="mode_selection" 会自动更新 st.session_state.mode_selection
+    # 修复 BUG 的关键：
+    # 1. 移除了 on_change=reset_experiment，防止 Rerun 时自动重置
+    # 2. 禁用了 default value 的动态改变，完全依赖 key="mode_selection"
     mode_disabled = st.session_state.experiment_started 
-    mode_selection = st.radio(
+    st.radio(
         "Select Teacher Style:",
         ["Empathy Mode", "Neutral Mode"],
         key="mode_selection",
-        on_change=reset_experiment,
         disabled=mode_disabled
     )
     
@@ -312,8 +319,9 @@ with st.sidebar:
         pd.DataFrame(data).to_csv("data.csv", index=False)
         st.write("CSV Saved locally (Simulation).")
 
+    # 只有点击这个红色按钮，才会重置
     if st.button("🔴 Reset Experiment"):
-        reset_experiment()
+        reset_experiment_logic()
         st.rerun()
 
 # --- Main UI ---
@@ -335,6 +343,9 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
+    # 获取当前的模式选择 (直接从 Session State 获取)
+    current_mode = st.session_state.get("mode_selection", "Empathy Mode")
+
     with chat_container:
         for msg in st.session_state.display_history:
             avatar = "👩‍🏫" if msg["role"] == "assistant" else "👤"
@@ -345,9 +356,10 @@ with col_chat:
         # A. Auto-Start Logic (Triggered only once)
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
+            # 只在后台添加 trigger，不显示
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 这里传入空字符串，只触发机器人的第一句话
-            handle_bot_response("", chat_container, mode_selection)
+            # 触发回复
+            handle_bot_response("", chat_container, current_mode)
 
         # B. User Input Logic
         user_input = st.chat_input("Type your response here...")
@@ -361,14 +373,15 @@ with col_chat:
                 sentiment_val = st.session_state.sentiment_counter.value
                 
                 system_instruction = ""
-                if mode_selection == "Empathy Mode":
+                if current_mode == "Empathy Mode":
                     if sentiment_val <= -2:
                         system_instruction = f"(System: User discouraged (Score {sentiment_val}). Be extra encouraging!) "
                     elif sentiment_val >= 2:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
-                handle_bot_response(final_prompt, chat_container, mode_selection)
+                # 传入 current_mode 确保使用了正确的音色
+                handle_bot_response(final_prompt, chat_container, current_mode)
     
     else:
         with chat_container:
