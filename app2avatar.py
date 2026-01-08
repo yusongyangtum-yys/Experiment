@@ -34,9 +34,9 @@ VOICE_EMPATHY = "en-US-AnaNeural"
 # Neutral Mode: 严肃男声 (Christopher)
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
-TTS_RATE = "+25%" 
+# 注意：TTS_RATE 现在在 play_audio_full 函数中动态决定，不再使用全局变量
 
-# --- Prompt Definitions (CRITICAL UPDATE HERE) ---
+# --- Prompt Definitions ---
 
 SYSTEM_PROMPT_EMPATHY = (
     "You are Sophia, a supportive psychology teacher. Your goal is to teach 6 topics step-by-step: "
@@ -69,18 +69,20 @@ SYSTEM_PROMPT_EMPATHY = (
     "- After the 15th question, show the total score and say 'Thanks for the effort. The session is complete.'"
 )
 
-# 修改重点：显式要求 Multiple Choice，且必须 One-by-One
+# 修改：明确列出具体主题，防止 LLM 自由发挥；明确考试流程
 SYSTEM_PROMPT_NEUTRAL = (
-    "You are a neutral, factual AI instructor teaching 6 Psychology topics. "
-    "Do not use emotional language. Do not praise. Be concise but thorough."
+    "You are a neutral, factual AI instructor. Your goal is to teach exactly these 6 specific Psychology topics: "
+    "1. Classical Conditioning (Pavlov), 2. Operant Conditioning (Skinner), 3. Memory Types, "
+    "4. Cognitive Biases, 5. Social Conformity, 6. Motivation Theory."
     "\n\n"
     "### LENGTH CONTROL"
     "\n- **Keep responses Moderate (around 150-200 words).**"
+    "\n- Focus on definitions, experiments, and facts. No emotional filler."
     "\n\n"
     "### INSTRUCTION FLOW:"
     "\n\n"
     "**PHASE 1: INTRODUCTION**\n"
-    "- Briefly introduce yourself and list the 6 topics.\n"
+    "- Briefly introduce yourself and list the 6 topics strictly as above.\n"
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
     "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
@@ -98,12 +100,13 @@ SYSTEM_PROMPT_NEUTRAL = (
     "  4. **Feedback**: After the user answers, state 'Correct' or 'Incorrect' (neutral tone only). \n"
     "  5. **Next Step**: Immediately present the **NEXT** question.\n"
     "- Repeat this loop until 15 questions are completed.\n"
-    "- After Question 15, display the final score (e.g., Score: 12/15) and say 'The session is complete.'"
+    "- After Question 15, display the final score and say 'The session is complete.'"
 )
 
 # --- 2. Javascript Hack (Clean previous audio) ---
 
 def stop_previous_audio():
+    # 强制清理浏览器中所有音频标签，防止声音重叠
     js_code = """
         <script>
             var audios = document.getElementsByTagName('audio');
@@ -165,10 +168,11 @@ def enforce_token_budget(messages):
         return [messages[0]] + messages[-10:]
     return messages
 
-# --- 4. TTS Logic ---
+# --- 4. TTS Logic (Updated for specific rates) ---
 
-async def edge_tts_generate(text, voice):
-    communicate = edge_tts.Communicate(text, voice, rate=TTS_RATE)
+async def edge_tts_generate(text, voice, rate):
+    """异步生成音频，接受特定的 rate 参数"""
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
     audio_data = b""
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -179,24 +183,28 @@ def play_audio_full(text, active_mode):
     if not text.strip():
         return
         
-    # 读取 Locked Mode
+    # 根据 active_mode 设置音色和语速
     if active_mode == "Neutral Mode":
         voice = VOICE_NEUTRAL
         icon = "👨‍🏫"
+        current_rate = "+10%" # Neutral 模式降速，防止男声过快含糊
     else:
         voice = VOICE_EMPATHY
         icon = "👩‍🏫"
+        current_rate = "+25%" # Empathy 模式保持较快语速
     
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
 
+    # 清除旧容器
     if "audio_container" in st.session_state:
         st.session_state.audio_container.empty()
 
     try:
-        # 显示生成的 voice，确保一致
-        st.toast(f"Speaking: {voice}", icon=icon)
+        # Toast 提示当前音色和语速，方便调试
+        st.toast(f"Speaking: {voice} at {current_rate}", icon=icon)
+        
         with st.spinner(f"🔊 Generating audio ({voice})..."):
-            audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice))
+            audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice, current_rate))
     except Exception as e:
         st.error(f"TTS Error: {e}")
         return
@@ -219,10 +227,12 @@ def play_audio_full(text, active_mode):
 # --- 5. Logic: Text First, Then Audio ---
 
 def handle_bot_response(user_input, chat_container, active_mode):
+    # 1. 记录用户输入
     if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
+        # 根据模式显示不同的头像
         bot_avatar = "👨‍🏫" if active_mode == "Neutral Mode" else "👩‍🏫"
         
         with st.chat_message("assistant", avatar=bot_avatar):
@@ -249,6 +259,7 @@ def handle_bot_response(user_input, chat_container, active_mode):
             
             chat_placeholder.markdown(full_response)
             
+            # --- 关键：立刻保存历史 ---
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
@@ -256,6 +267,7 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
                 st.success("Session Data Saved.")
 
+            # 2. 最后生成音频，传入 active_mode 以决定语速和音色
             play_audio_full(full_response, active_mode)
 
 def reset_experiment_logic():
@@ -263,6 +275,7 @@ def reset_experiment_logic():
     st.session_state.sentiment_counter.reset()
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
+    # 清空锁定的模式
     if "active_mode" in st.session_state:
         del st.session_state.active_mode
     
@@ -309,10 +322,11 @@ with st.sidebar:
             if st.session_state.subject_id.strip():
                 st.session_state.experiment_started = True
                 
-                # HARD LOCK MODE
+                # --- HARD LOCK MODE ---
                 selected = st.session_state.get("mode_selection", "Empathy Mode")
                 st.session_state.active_mode = selected
                 
+                # Set Initial Prompt based on selection
                 prompt = SYSTEM_PROMPT_EMPATHY if selected == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
                 st.session_state.messages = [{"role": "system", "content": prompt}]
                 
@@ -367,10 +381,12 @@ if glb_data:
 with col_chat:
     chat_container = st.container(height=520)
     
+    # 始终读取 locked_mode
     locked_mode = st.session_state.active_mode
 
     with chat_container:
         for msg in st.session_state.display_history:
+            # 根据 locked_mode 决定头像
             avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
             st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
@@ -380,6 +396,7 @@ with col_chat:
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
+            # 传递 locked_mode
             handle_bot_response("", chat_container, locked_mode)
 
         # B. User Input Logic
@@ -401,6 +418,7 @@ with col_chat:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
+                # 传递 locked_mode
                 handle_bot_response(final_prompt, chat_container, locked_mode)
     
     else:
