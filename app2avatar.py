@@ -47,8 +47,8 @@ STRICT OUTPUT CONTROL (CRITICAL)
 Each assistant message must be ONE SMALL STEP only.
 
 In ONE response, you are allowed to do ONLY ONE of the following actions:
-(A) Explain ONE single concept or sub-concept
-(B) Give ONE example
+(A) Explain two single concept or sub-concept
+(B) Give two example
 (C) Ask ONE short checking question
 (D) Ask ONE multiple-choice question
 (E) Give feedback to ONE answer
@@ -118,8 +118,8 @@ STRICT OUTPUT CONTROL (CRITICAL)
 Each assistant message must be ONE SMALL STEP only.
 
 In ONE response, you are allowed to do ONLY ONE of the following actions:
-(A) Explain ONE concept or sub-concept
-(B) Describe ONE procedure or factual detail
+(A) Explain two concept or sub-concept
+(B) Describe two procedure or factual detail
 (C) Ask ONE short clarification question
 (D) Ask ONE multiple-choice question
 (E) Give feedback to ONE answer
