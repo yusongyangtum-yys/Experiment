@@ -33,10 +33,10 @@ VOICE_NEUTRAL = "en-US-ChristopherNeural"
 
 # --- Prompt Definitions ---
 
+# 修改点：3个Topic，10道题，Chunking打断，Mini-Quiz，同理心反馈
 SYSTEM_PROMPT_EMPATHY = (
-    "You are Sophia, a supportive psychology teacher. Your goal is to teach 6 topics step-by-step: "
-    "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types, "
-    "4. Cognitive Biases, 5. Social Conformity, 6. Motivation Theory."
+    "You are Sophia, a supportive and warm psychology teacher. Your goal is to teach 3 topics step-by-step: "
+    "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types."
     "\n\n"
     "### IMPORTANT: INTERACTIVE CHUNKING"
     "\n- **Length Control**: Aim for moderate chunks (around 4-6 sentences) that cover one complete idea."
@@ -46,28 +46,29 @@ SYSTEM_PROMPT_EMPATHY = (
     "### INSTRUCTION FLOW:"
     "\n\n"
     "**PHASE 1: INTRODUCTION**\n"
-    "- Briefly introduce yourself and list the 6 topics.\n"
+    "- Briefly introduce yourself warmly and list the 3 topics.\n"
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
-    "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
-    "1. **Teach ONE Concept**: Explain the concept fully (150-200 words).\n"
-    "2. **Check Understanding**: Ask 'Do you have any questions about this topic, or shall we move to the next one?'\n"
-    "3. **Transition**: If user says yes/ready, move to the NEXT topic. (NO INTERMEDIATE QUIZZES)."
+    "**PHASE 2: TEACHING LOOP (Repeat for ALL 3 topics)**\n"
+    "1. **Teach Concept (Chunked)**: Explain the concept using the 'Interactive Chunking' rule above.\n"
+    "2. **Mini-Quiz**: AFTER the concept is fully taught, give **1 multiple-choice question** about this topic immediately.\n"
+    "3. **Feedback**: Praise warmly if correct (e.g., 'That's wonderful!', 'You're doing great!'). If wrong, be very gentle and encouraging (e.g., 'Not quite, but that's a tricky one. The right answer is...').\n"
+    "4. **Transition**: Ask if ready for the NEXT topic."
     "\n\n"
     "**PHASE 3: SUMMATIVE EXAM (Final Phase)**\n"
-    "- Trigger this ONLY after all 6 topics are taught.\n"
-    "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 15 questions one by one.'\n"
+    "- Trigger this ONLY after all 3 topics (and their mini-quizzes) are finished.\n"
+    "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 10 questions one by one.'\n"
     "- **Exam Rules**:\n"
     "  1. Ask **ONE** multiple-choice question (Options A, B, C, D).\n"
     "  2. **STOP** and wait for the user to answer.\n"
-    "  3. After user answers: Praise if correct, correct gently if wrong. Then ask the **NEXT** question.\n"
-    "- After the 15th question, show the total score and say 'Thanks for the effort. The session is complete.'"
+    "  3. **Feedback**: Provide **empathetic and supportive feedback** after every answer.\n"
+    "  4. Ask the **NEXT** question.\n"
+    "- **Final Score**: After the 10th question, silently review the user's answers to calculate the correct score. Then show the total score (e.g., 'You got 8 out of 10!') and say 'The session is complete.'"
 )
 
 SYSTEM_PROMPT_NEUTRAL = (
-    "You are a neutral, factual AI instructor. Your goal is to teach exactly these 6 specific Psychology topics: "
-    "1. Classical Conditioning (Pavlov), 2. Operant Conditioning (Skinner), 3. Memory Types, "
-    "4. Cognitive Biases, 5. Social Conformity, 6. Motivation Theory."
+    "You are a neutral, factual AI instructor. Your goal is to teach exactly these 3 specific Psychology topics: "
+    "1. Classical Conditioning (Pavlov), 2. Operant Conditioning (Skinner), 3. Memory Types."
     "\n\n"
     "### IMPORTANT: PACING AND LENGTH"
     "\n- Provide concise but complete explanations for each sub-concept (approx. 100 words)."
@@ -76,25 +77,24 @@ SYSTEM_PROMPT_NEUTRAL = (
     "\n\n"
     "### INSTRUCTION FLOW:"
     "**PHASE 1: INTRODUCTION**\n"
-    "- Briefly introduce yourself and list the 6 topics strictly as above.\n"
+    "- Briefly introduce yourself and list the 3 topics strictly.\n"
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
-    "**PHASE 2: TEACHING LOOP (Repeat for ALL 6 topics)**\n"
-    "1. **Teach ONE Concept**: Explain the concept strictly factually (150-200 words).\n"
-    "2. **Check Understanding**: Ask 'Do you have questions, or proceed to the next topic?'\n"
-    "3. **Transition**: If user agrees, move to the NEXT topic immediately."
+    "**PHASE 2: TEACHING LOOP (Repeat for ALL 3 topics)**\n"
+    "1. **Teach Concept**: Explain strictly factually using chunking.\n"
+    "2. **Mini-Quiz**: Present 1 multiple-choice question to test the concept immediately.\n"
+    "3. **Feedback**: State 'Correct' or 'Incorrect' and provide the correct answer neutrally.\n"
+    "4. **Transition**: Move to the NEXT topic immediately."
     "\n\n"
     "**PHASE 3: FINAL EXAM (Strictly Multiple Choice)**\n"
-    "- Trigger this ONLY after Topic 6 is finished.\n"
-    "- Say: 'We will now begin the final exam consisting of 15 multiple-choice questions.'\n"
-    "- **Exam Protocol (Strictly Follow)**:\n"
-    "  1. Present **ONE** multiple-choice question related to the taught topics. Ensure it has options A, B, C, D.\n"
-    "  2. **STOP** generating text immediately. Do NOT ask the next question yet.\n"
-    "  3. **WAIT** for the user's input.\n"
-    "  4. **Feedback**: After the user answers, state 'Correct' or 'Incorrect' (neutral tone only). \n"
-    "  5. **Next Step**: Immediately present the **NEXT** question.\n"
-    "- Repeat this loop until 15 questions are completed.\n"
-    "- After Question 15, display the final score and say 'The session is complete.'"
+    "- Trigger this ONLY after Topic 3 is finished.\n"
+    "- Say: 'We will now begin the final exam consisting of 10 multiple-choice questions.'\n"
+    "- **Exam Protocol**:\n"
+    "  1. Present **ONE** multiple-choice question (A, B, C, D).\n"
+    "  2. **STOP** and wait for input.\n"
+    "  3. **Feedback**: State result strictly ('Correct'/'Incorrect').\n"
+    "  4. Present **NEXT** question.\n"
+    "- **Final Score**: After Question 10, calculate the score accurately based on history and display it (e.g., 'Score: 7/10'). Then say 'The session is complete.'"
 )
 
 # --- 2. Javascript Hack ---
@@ -115,14 +115,15 @@ stop_previous_audio()
 
 # --- 3. Helper Functions ---
 
-def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
-    """保存数据到 Google Sheets，并返回详细错误信息以便调试"""
+# 修改点：加入 mode 参数，调整 Row 结构
+def save_to_google_sheets(subject_id, chat_history, mode, score_summary="N/A"):
+    """保存数据到 Google Sheets"""
     try:
-        # 1. 检查 Secrets 是否存在
+        # 1. 检查 Secrets
         if "gcp_service_account" not in st.secrets:
             return False, "Error: 'gcp_service_account' not found in st.secrets."
         
-        # 2. 连接 Google Drive / Sheets
+        # 2. 连接
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -133,16 +134,17 @@ def save_to_google_sheets(subject_id, chat_history, score_summary="N/A"):
         try:
             sh = gc.open(sheet_name)
         except gspread.SpreadsheetNotFound:
-            return False, f"Error: Spreadsheet '{sheet_name}' not found. Did you share it with the service account email?"
+            return False, f"Error: Spreadsheet '{sheet_name}' not found."
 
         worksheet = sh.sheet1
         
         # 4. 准备数据
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        history_json = json.dumps(chat_history, ensure_ascii=False)
+        # 不需要 json dump history 这一列了，根据您的要求只留前几列
+        # history_json = json.dumps(chat_history, ensure_ascii=False) 
         
-        # 5. 写入行
-        row = [subject_id, timestamp, score_summary]
+        # 5. 写入行 [ID, Time, Mode, Score]
+        row = [subject_id, timestamp, mode, score_summary]
         worksheet.append_row(row)
         
         return True, "Success"
@@ -185,17 +187,17 @@ async def edge_tts_generate(text, voice, rate):
             audio_data += chunk["data"]
     return audio_data
 
-def play_audio_full(text, active_mode):
-    if not text.strip():
+# 修改点：加入 enable_audio 开关判断，移除 Toast
+def play_audio_full(text, active_mode, enable_audio):
+    # 1. 如果文本为空或语音功能被关闭，直接返回
+    if not text.strip() or not enable_audio:
         return
         
     if active_mode == "Neutral Mode":
         voice = VOICE_NEUTRAL
-        icon = "👨‍🏫"
         current_rate = "+10%" 
     else:
         voice = VOICE_EMPATHY
-        icon = "👩‍🏫"
         current_rate = "+25%" 
     
     clean_text = text.replace("*", "").replace("#", "").replace("`", "")
@@ -204,8 +206,10 @@ def play_audio_full(text, active_mode):
         st.session_state.audio_container.empty()
 
     try:
-        st.toast(f"Speaking: {voice} at {current_rate}", icon=icon)
-        with st.spinner(f"🔊 Generating audio ({voice})..."):
+        # 移除 Toast 提示
+        # st.toast(f"Speaking: {voice} at {current_rate}", icon=icon)
+        
+        with st.spinner(f"🔊 Generating audio..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice, current_rate))
     except Exception as e:
         st.error(f"TTS Error: {e}")
@@ -228,7 +232,7 @@ def play_audio_full(text, active_mode):
 
 # --- 5. Logic ---
 
-def handle_bot_response(user_input, chat_container, active_mode):
+def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
     if user_input: 
         st.session_state.messages.append({"role": "user", "content": user_input})
     
@@ -263,16 +267,23 @@ def handle_bot_response(user_input, chat_container, active_mode):
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
             # --- 自动保存触发逻辑 ---
-            # 如果检测到结束语，尝试保存
             if "session is complete" in full_response.lower():
-                success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Completed")
+                # 尝试从文本中提取分数（简单提取）作为 summary，或者直接用 "Completed"
+                # 为了更准确，我们可以直接把最后这句回复当做 summary 存进去，人工后续在 sheet 里看
+                # 或者，这里直接存 "Completed" + 最后的 Response
+                summary_text = "Completed"
+                if "score" in full_response.lower():
+                    summary_text = f"Completed (Check History for Score)"
+                
+                # 传入 active_mode
+                success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, active_mode, summary_text)
                 if success:
                     st.success("✅ Session Data Successfully Saved to Google Sheets!")
                     st.balloons()
                 else:
                     st.error(f"❌ Save Failed: {msg}")
 
-            play_audio_full(full_response, active_mode)
+            play_audio_full(full_response, active_mode, enable_audio)
 
 def reset_experiment_logic():
     st.session_state.display_history = []
@@ -319,6 +330,9 @@ with st.sidebar:
     if input_id != st.session_state.subject_id:
         st.session_state.subject_id = input_id
     
+    # 修改点：加入语音开关
+    enable_audio = st.checkbox("🔊 Enable Audio", value=True)
+    
     if not st.session_state.experiment_started:
         if st.button("🚀 Start Experiment", type="primary"):
             if st.session_state.subject_id.strip():
@@ -346,8 +360,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 修复：使用 download_button 实现真正的文件下载
-    # 准备 CSV 数据
+    # CSV 下载保持不变，但内容已符合要求
     csv_data = pd.DataFrame({
         "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
         "Role": [m["role"] for m in st.session_state.display_history],
@@ -362,9 +375,9 @@ with st.sidebar:
         mime="text/csv"
     )
 
-    # 新增：手动强制保存到 Google Sheets 按钮
     if st.button("☁️ Force Save to Sheets"):
-        success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, "Manual Save")
+        # 强制保存时也带上 mode
+        success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, st.session_state.active_mode, "Manual Save")
         if success:
             st.success("Saved!")
         else:
@@ -404,7 +417,7 @@ with col_chat:
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            handle_bot_response("", chat_container, locked_mode)
+            handle_bot_response("", chat_container, locked_mode, enable_audio)
 
         user_input = st.chat_input("Type your response here...")
         
@@ -424,7 +437,7 @@ with col_chat:
                         system_instruction = f"(System: User confident. Keep going.) "
                 
                 final_prompt = system_instruction + user_input
-                handle_bot_response(final_prompt, chat_container, locked_mode)
+                handle_bot_response(final_prompt, chat_container, locked_mode, enable_audio)
     else:
         with chat_container:
             st.info("👈 Please enter your Subject ID in the sidebar and click 'Start Experiment' to begin.")
