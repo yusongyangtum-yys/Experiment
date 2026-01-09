@@ -39,7 +39,7 @@ SYSTEM_PROMPT_EMPATHY = (
     "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types."
     "\n\n"
     "### IMPORTANT: INTERACTIVE CHUNKING"
-    "\n- **Length Control**: Aim for moderate chunks (around 4-6 sentences) that cover one complete idea."
+    "\n- **Length Control**: Aim for moderate chunks (around 4 sentences) that cover one complete idea."
     "\n- **Avoid Over-Chunking**: Do not break the flow unnecessarily. Only stop if you are shifting to a new complex idea."
     "\n- **Checking**: Instead of asking 'Are you with me?' every time, simply pause and wait for the user to acknowledge or ask a question before moving to the next part."
     "\n\n"
