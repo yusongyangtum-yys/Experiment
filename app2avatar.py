@@ -31,11 +31,9 @@ TEMPERATURE = 0.5
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
-# --- Prompt Definitions ---
+# --- Prompt Definitions (Updated to Strict Control Version) ---
 
-# 修改点：强调深度教学，通过分段+询问来控制节奏，而不是缩减内容
-SYSTEM_PROMPT_EMPATHY = (
-    """
+SYSTEM_PROMPT_EMPATHY = """
 You are Sophia, a supportive, warm, and patient psychology teacher.
 
 Your goal is to teach exactly these 3 topics:
@@ -104,9 +102,9 @@ PHASE 3: FINAL EXAM
   - Move to the next question.
 - After Question 10, calculate the score and say:
   "You got X out of 10. The session is complete."
-""")
+"""
 
-SYSTEM_PROMPT_NEUTRAL = ("""
+SYSTEM_PROMPT_NEUTRAL = """
 You are a neutral, factual AI instructor.
 
 Your task is to teach exactly these 3 psychology topics:
@@ -173,7 +171,7 @@ PHASE 3: FINAL EXAM
   - Continue until Question 10.
 - After Question 10, calculate and report:
   "Score: X/10. The session is complete."
-""")
+"""
 
 # --- 2. Javascript Hack ---
 def stop_previous_audio():
@@ -193,7 +191,8 @@ stop_previous_audio()
 
 # --- 3. Helper Functions ---
 
-def save_to_google_sheets(subject_id, chat_history, mode, score_summary="N/A"):
+# 修改点：加入 audio_enabled 参数
+def save_to_google_sheets(subject_id, chat_history, mode, audio_enabled, score_summary="N/A"):
     """保存数据到 Google Sheets"""
     try:
         # 1. 检查 Secrets
@@ -217,9 +216,10 @@ def save_to_google_sheets(subject_id, chat_history, mode, score_summary="N/A"):
         
         # 4. 准备数据
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        audio_status = "On" if audio_enabled else "Off"
         
-        # 5. 写入行 [ID, Time, Mode, Score]
-        row = [subject_id, timestamp, mode, score_summary]
+        # 5. 写入行 [ID, Time, Mode, Audio, Score]
+        row = [subject_id, timestamp, mode, audio_status, score_summary]
         worksheet.append_row(row)
         
         return True, "Success"
@@ -341,9 +341,17 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
             if "session is complete" in full_response.lower():
                 summary_text = "Completed"
                 if "score" in full_response.lower():
-                    summary_text = f"Completed (Check History for Score)"
+                    # 尝试提取分数信息
+                    summary_text = f"Completed ({full_response[-30:].strip()})" 
                 
-                success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, active_mode, summary_text)
+                # 传入 enable_audio 状态
+                success, msg = save_to_google_sheets(
+                    st.session_state.subject_id, 
+                    st.session_state.display_history, 
+                    active_mode, 
+                    enable_audio, 
+                    summary_text
+                )
                 if success:
                     st.success("✅ Session Data Successfully Saved to Google Sheets!")
                     st.balloons()
@@ -427,9 +435,10 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # CSV 下载
+    # CSV 下载 (包含 Audio Status 列)
     csv_data = pd.DataFrame({
         "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
+        "AudioEnabled": ["On" if enable_audio else "Off"] * len(st.session_state.display_history), # 新增列
         "Role": [m["role"] for m in st.session_state.display_history],
         "Content": [m["content"] for m in st.session_state.display_history],
         "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * len(st.session_state.display_history)
@@ -443,7 +452,14 @@ with st.sidebar:
     )
 
     if st.button("☁️ Force Save to Sheets"):
-        success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, st.session_state.active_mode, "Manual Save")
+        # 强制保存时也带上 audio_enabled
+        success, msg = save_to_google_sheets(
+            st.session_state.subject_id, 
+            st.session_state.display_history, 
+            st.session_state.active_mode, 
+            enable_audio,
+            "Manual Save"
+        )
         if success:
             st.success("Saved!")
         else:
