@@ -351,11 +351,14 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
                     full_response += txt
                     chat_placeholder.markdown(full_response + "▌")
             
-            # --- 关键修改：处理隐形标签 ---
-            # 1. 检查是否有 [CORRECT] 或 [INCORRECT]
-            # 2. 如果有，更新 Python 计数器
-            # 3. 将标签从显示文本中移除，让用户看不到，但逻辑能捕捉到
-            
+            # --- 1. 检测是否开始 Final Exam，如果是，重置分数 ---
+            # 依据 Prompt 中的固定话术 "Now we will begin the final exam"
+            if "begin the final exam" in full_response.lower():
+                st.session_state.correct_count = 0
+                # 可选：给个提示，让后台知道重置了
+                # print("Score reset for Final Exam") 
+
+            # --- 2. 处理隐形标签并计分 ---
             clean_display_response = full_response
             
             if "[CORRECT]" in full_response:
@@ -367,23 +370,18 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
             # 重新渲染不带标签的干净文本
             chat_placeholder.markdown(clean_display_response)
             
-            # 保存到 history (保存干净文本)
-            st.session_state.messages.append({"role": "assistant", "content": full_response}) # 存原始带标签的给 LLM 保持上下文
+            # 保存到 history (保存干净文本，以免历史记录里全是标签)
+            st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
             
-            # --- 自动保存与结算逻辑 ---
-            if "session is complete" in full_response.lower():
-                # 使用 Python 统计的分数
+            # --- 3. 自动保存与结算逻辑 ---
+            response_lower = full_response.lower()
+            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
+                # 使用 Python 统计的分数 (此时已经是重置后的 10 题制分数了)
                 final_score = st.session_state.correct_count
                 
-                # 总题数 (3个Topic Quiz + 10个Final Exam = 13题) 
-                # 或者你可以只算 Final Exam，但因为代码是从头跑的，correct_count 会包含 Topic Quiz。
-                # 建议：在 Final Exam 开始时重置计数器？
-                # 简化方案：只显示 "Total Correct Answers: X"
-                
-                # 修正显示：在最后追加 Python 算出的真实分数
                 st.info(f"📊 Final Score Calculation: You answered {final_score} questions correctly.")
-                summary_text = f"Completed - Score: {final_score}"
+                summary_text = f"Completed - Score: {final_score}/10"
                 
                 success, msg = save_to_google_sheets(
                     st.session_state.subject_id, 
@@ -393,12 +391,12 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
                     summary_text
                 )
                 if success:
-                    st.success("✅ Session Data Saved!")
+                    st.success("✅ Session Data Successfully Saved to Google Sheets!")
                     st.balloons()
                 else:
                     st.error(f"❌ Save Failed: {msg}")
 
-            # 播放音频 (播放干净文本)
+            # 播放音频
             play_audio_full(clean_display_response, active_mode, enable_audio)
 
 def reset_experiment_logic():
