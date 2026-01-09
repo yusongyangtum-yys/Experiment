@@ -12,6 +12,7 @@ from google.oauth2.service_account import Credentials
 import asyncio
 import edge_tts
 import uuid 
+import re # 新增：用于正则提取标记
 
 # --- 1. Configuration ---
 
@@ -31,7 +32,7 @@ TEMPERATURE = 0.5
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
-# --- Prompt Definitions (Fixing Score Logic & Keywords) ---
+# --- Prompt Definitions (Updated for Python Scoring) ---
 
 SYSTEM_PROMPT_EMPATHY = """
 You are Sophia, a supportive, warm, and patient psychology teacher.
@@ -46,34 +47,16 @@ OUTPUT CONTROL: MEANINGFUL SEGMENTS
 ────────────────────────────────
 Each assistant message must cover **ONE COMPLETE LOGICAL SEGMENT**.
 
-Instead of stopping after every sentence, you should:
-1. **Explain a concept thoroughly** (including definition and key details).
-2. **Provide a relevant example** immediately to help understanding.
-3. Keep the length **moderate (approx. 100-150 words)** to ensure depth.
+Allowed Structure (Teaching Phase):
+[Explanation] + [Example] + [Check Question]
 
-**Allowed Structure per Message (Teaching Phase):**
-[Explanation of Concept] + [Real-world Example] + [Short Pause Question]
-
-**Exception for Final Exam:**
-- During the exam, keep feedback short.
-- For the final result, ONLY output the score and the session complete phrase.
-
-**Rules:**
-- Do NOT ask checking questions in the middle of an explanation.
-- Do NOT break a single concept into tiny pieces. Deliver the whole idea.
-- ONLY stop and ask a checking question when you have finished a complete segment.
-
-End your response with a gentle check-in:
-- "Does this explanation make sense to you?"
-- "How does that example sound?"
-- "Ready to move on?"
-
-────────────────────────────────
-TEACHING STYLE (EMPATHY)
-────────────────────────────────
-- Be warm, encouraging, and emotionally supportive.
-- Use gentle language.
-- Praise effort, not just correctness.
+**IMPORTANT: SCORING TAGS (CRITICAL)**
+- Whenever the user answers a **Mini-Quiz** or **Final Exam** question:
+  - If CORRECT: Start your response with **"[CORRECT] "** (including brackets).
+  - If INCORRECT: Start your response with **"[INCORRECT] "** (including brackets).
+  - Example: "[CORRECT] That's wonderful! You got it right."
+  - Example: "[INCORRECT] Not quite. The correct answer is..."
+- These tags are HIDDEN from the user but used for scoring. YOU MUST USE THEM.
 
 ────────────────────────────────
 TEACHING FLOW
@@ -81,34 +64,25 @@ TEACHING FLOW
 
 PHASE 1: INTRODUCTION
 - Introduce yourself warmly.
-- List the 3 topics.
-- Ask if the student is ready to begin Topic 1.
-- Stop and wait.
+- List 3 topics.
+- Ask if ready for Topic 1.
 
 PHASE 2: TOPIC LOOP (repeat for ALL 3 topics)
-1. **Teach a Sub-Topic**: Explain a major part of the topic (e.g., Definition + Experiment) fully in one message.
-2. Stop and ask for understanding.
-3. Wait for response.
-4. **Teach the Next Part**: Explain the next logical segment (e.g., Key Principles + Application).
-5. Stop and ask.
-6. (Repeat until topic is covered).
-7. **Mini-Quiz**: Ask EXACTLY ONE multiple-choice question for this topic.
-8. Wait for answer -> Give warm feedback.
-9. Ask if ready for the next topic.
+1. **Teach**: Explain concept + example. Stop and ask.
+2. (Continue teaching parts...)
+3. **Mini-Quiz**: Ask 1 multiple-choice question.
+4. Wait for answer.
+5. **Feedback**: MUST start with [CORRECT] or [INCORRECT]. Give warm feedback.
+6. Ask if ready for next topic.
 
 PHASE 3: FINAL EXAM
-- Trigger ONLY after all 3 topics are finished.
 - Say: "Now we will begin the final exam. I will ask 10 questions one by one."
-- Exam rules:
-  - Ask ONE multiple-choice question at a time.
-  - STOP and wait for answer.
-  - Give empathetic feedback.
-  - Move to next question.
+- Loop 10 times:
+  - Ask ONE question.
+  - Wait for answer.
+  - **Feedback**: MUST start with [CORRECT] or [INCORRECT].
 - After Question 10:
-  1. **Review History**: Count the correct answers from the chat history.
-  2. **Report Score**: You MUST use the format "Score: X/10".
-  3. **Trigger Save**: You MUST output the exact phrase "The session is complete."
-  (Example: "You did great! Score: 8/10. The session is complete.")
+  - Output ONLY: "The session is complete." (Python will handle the score display).
 """
 
 SYSTEM_PROMPT_NEUTRAL = """
@@ -124,68 +98,40 @@ OUTPUT CONTROL: COMPREHENSIVE BLOCKS
 ────────────────────────────────
 Each assistant message must deliver **ONE COMPLETE INFORMATIONAL BLOCK**.
 
-Do not fragment information. Your goal is efficiency and completeness.
-1. **Define and Describe**: Explain the concept or procedure clearly.
-2. **Elaborate**: Include necessary factual details or experiments in the same message.
-3. Keep length **moderate (approx. 100-150 words)**.
+Allowed Structure (Teaching Phase):
+[Explanation] + [Details] + [Status Check]
 
-**Allowed Structure per Message (Teaching Phase):**
-[Factual Explanation] + [Details/Experiment] + [Status Check]
-
-**Exception for Final Exam:**
-- During the exam, keep feedback strictly factual and concise.
-- For the final result, ONLY output the score and the session complete phrase.
-
-**Rules:**
-- Do NOT interrupt the flow with questions until the block is complete.
-- Ensure the explanation is self-contained and academic.
-- End with a neutral status check.
-
-End your response with a short check:
-- "Is this concept clear?"
-- "Shall I proceed to the next section?"
-
-────────────────────────────────
-TEACHING STYLE (NEUTRAL)
-────────────────────────────────
-- Maintain objective, academic tone.
-- No emotional language.
-- Be precise and factual.
+**IMPORTANT: SCORING TAGS (CRITICAL)**
+- Whenever the user answers a **Mini-Quiz** or **Final Exam** question:
+  - If CORRECT: Start response with **"[CORRECT] "**
+  - If INCORRECT: Start response with **"[INCORRECT] "**
+  - Example: "[CORRECT] Correct. The answer is A."
 
 ────────────────────────────────
 TEACHING FLOW
 ────────────────────────────────
 
 PHASE 1: INTRODUCTION
-- Introduce yourself briefly.
-- List the 3 topics.
-- Ask if ready to start Topic 1.
-- Stop and wait.
+- Introduce yourself.
+- List 3 topics.
+- Ask if ready for Topic 1.
 
 PHASE 2: TOPIC LOOP (repeat for ALL 3 topics)
-1. **Teach Section A**: Explain the first major section of the topic comprehensively.
-2. Stop and ask if clear.
-3. Wait for response.
-4. **Teach Section B**: Explain the next major section (e.g., Applications/Nuances).
-5. Stop and ask.
-6. (Repeat until topic is covered).
-7. **Mini-Quiz**: Ask EXACTLY ONE multiple-choice question.
-8. Wait for answer -> Give factual feedback ("Correct"/"Incorrect").
-9. Proceed to next topic.
+1. **Teach**: Explain concept. Stop and ask.
+2. (Continue teaching...)
+3. **Mini-Quiz**: Ask 1 multiple-choice question.
+4. Wait for answer.
+5. **Feedback**: MUST start with [CORRECT] or [INCORRECT].
+6. Proceed to next topic.
 
 PHASE 3: FINAL EXAM
-- Start ONLY after Topic 3 is finished.
 - Say: "We will now begin the final exam consisting of 10 multiple-choice questions."
-- Rules:
-  - Ask ONE question at a time.
-  - STOP and wait for input.
-  - Give factual feedback only.
-  - Continue until Question 10.
+- Loop 10 times:
+  - Ask ONE question.
+  - Wait for answer.
+  - **Feedback**: MUST start with [CORRECT] or [INCORRECT].
 - After Question 10:
-  1. **Review History**: Count the correct answers from the chat history.
-  2. **Report Score**: You MUST use the format "Score: X/10".
-  3. **Trigger Save**: You MUST output the exact phrase "The session is complete."
-  (Example: "Score: 7/10. The session is complete.")
+  - Output ONLY: "The session is complete."
 """
 
 # --- 2. Javascript Hack ---
@@ -228,7 +174,6 @@ def save_to_google_sheets(subject_id, chat_history, mode, audio_enabled, score_s
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         audio_status = "On" if audio_enabled else "Off"
         
-        # [ID, Time, Mode, Audio, Score]
         row = [subject_id, timestamp, mode, audio_status, score_summary]
         worksheet.append_row(row)
         
@@ -247,8 +192,16 @@ class SafeCounter:
     def increment(self): self.value = min(self.max_val, self.value + 1)
     def decrement(self): self.value = max(self.min_val, self.value - 1)
     def reset(self): self.value = 0
+    # 新增：答对计数器
+    def add_correct(self):
+        if "correct_count" not in st.session_state:
+            st.session_state.correct_count = 0
+        st.session_state.correct_count += 1
+    def get_correct(self):
+        return st.session_state.get("correct_count", 0)
 
 if "sentiment_counter" not in st.session_state: st.session_state.sentiment_counter = SafeCounter()
+if "correct_count" not in st.session_state: st.session_state.correct_count = 0
 
 def detect_sentiment(user_message):
     msg = user_message.lower()
@@ -257,11 +210,10 @@ def detect_sentiment(user_message):
     for w in NEGATIVE_WORDS: 
         if w in msg: st.session_state.sentiment_counter.decrement()
 
-# --- 关键修复：扩大记忆容量 ---
 def enforce_token_budget(messages):
-    # 修复：从 12 提高到 50，确保 LLM 能“看见”之前的做题记录，从而算对分
-    if len(messages) > 50:
-        return [messages[0]] + messages[-48:]
+    # 保持较大的上下文窗口
+    if len(messages) > 60:
+        return [messages[0]] + messages[-58:]
     return messages
 
 # --- 4. TTS Logic ---
@@ -343,19 +295,39 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
                     full_response += txt
                     chat_placeholder.markdown(full_response + "▌")
             
-            chat_placeholder.markdown(full_response)
+            # --- 关键修改：处理隐形标签 ---
+            # 1. 检查是否有 [CORRECT] 或 [INCORRECT]
+            # 2. 如果有，更新 Python 计数器
+            # 3. 将标签从显示文本中移除，让用户看不到，但逻辑能捕捉到
             
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            st.session_state.display_history.append({"role": "assistant", "content": full_response})
+            clean_display_response = full_response
             
-            # --- 自动保存触发逻辑 (放宽条件) ---
-            response_lower = full_response.lower()
-            # 只要包含 "session" 和 "complete"，或者明确有 "score" 和 "10" (如 "score: 8/10") 就保存
-            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
-                summary_text = "Completed"
-                if "score" in response_lower:
-                    # 尝试提取最后一段作为 summary
-                    summary_text = f"Completed - {full_response[-50:].replace(chr(10), ' ').strip()}"
+            if "[CORRECT]" in full_response:
+                st.session_state.correct_count += 1
+                clean_display_response = full_response.replace("[CORRECT]", "").strip()
+            elif "[INCORRECT]" in full_response:
+                clean_display_response = full_response.replace("[INCORRECT]", "").strip()
+            
+            # 重新渲染不带标签的干净文本
+            chat_placeholder.markdown(clean_display_response)
+            
+            # 保存到 history (保存干净文本)
+            st.session_state.messages.append({"role": "assistant", "content": full_response}) # 存原始带标签的给 LLM 保持上下文
+            st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
+            
+            # --- 自动保存与结算逻辑 ---
+            if "session is complete" in full_response.lower():
+                # 使用 Python 统计的分数
+                final_score = st.session_state.correct_count
+                
+                # 总题数 (3个Topic Quiz + 10个Final Exam = 13题) 
+                # 或者你可以只算 Final Exam，但因为代码是从头跑的，correct_count 会包含 Topic Quiz。
+                # 建议：在 Final Exam 开始时重置计数器？
+                # 简化方案：只显示 "Total Correct Answers: X"
+                
+                # 修正显示：在最后追加 Python 算出的真实分数
+                st.info(f"📊 Final Score Calculation: You answered {final_score} questions correctly.")
+                summary_text = f"Completed - Score: {final_score}"
                 
                 success, msg = save_to_google_sheets(
                     st.session_state.subject_id, 
@@ -365,16 +337,18 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
                     summary_text
                 )
                 if success:
-                    st.success("✅ Session Data Successfully Saved to Google Sheets!")
+                    st.success("✅ Session Data Saved!")
                     st.balloons()
                 else:
                     st.error(f"❌ Save Failed: {msg}")
 
-            play_audio_full(full_response, active_mode, enable_audio)
+            # 播放音频 (播放干净文本)
+            play_audio_full(clean_display_response, active_mode, enable_audio)
 
 def reset_experiment_logic():
     st.session_state.display_history = []
     st.session_state.sentiment_counter.reset()
+    st.session_state.correct_count = 0 # 重置分数
     st.session_state.experiment_started = False
     st.session_state.audio_container = st.empty()
     if "active_mode" in st.session_state:
@@ -409,6 +383,8 @@ if "experiment_started" not in st.session_state:
     st.session_state.experiment_started = False
 if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Empathy Mode" 
+if "correct_count" not in st.session_state:
+    st.session_state.correct_count = 0
 
 # --- Sidebar ---
 with st.sidebar:
@@ -426,6 +402,7 @@ with st.sidebar:
                 st.session_state.experiment_started = True
                 selected = st.session_state.get("mode_selection", "Empathy Mode")
                 st.session_state.active_mode = selected
+                st.session_state.correct_count = 0 # 重置分数
                 prompt = SYSTEM_PROMPT_EMPATHY if selected == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
                 st.session_state.messages = [{"role": "system", "content": prompt}]
                 st.rerun()
@@ -468,7 +445,7 @@ with st.sidebar:
             st.session_state.display_history, 
             st.session_state.active_mode, 
             enable_audio,
-            "Manual Save"
+            f"Manual Save (Score: {st.session_state.correct_count})"
         )
         if success:
             st.success("Saved!")
