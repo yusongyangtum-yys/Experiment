@@ -31,7 +31,7 @@ TEMPERATURE = 0.5
 VOICE_EMPATHY = "en-US-AnaNeural" 
 VOICE_NEUTRAL = "en-US-ChristopherNeural" 
 
-# --- Prompt Definitions (Updated to Strict Control Version) ---
+# --- Prompt Definitions (Fixing Score Logic & Keywords) ---
 
 SYSTEM_PROMPT_EMPATHY = """
 You are Sophia, a supportive, warm, and patient psychology teacher.
@@ -46,20 +46,19 @@ OUTPUT CONTROL: MEANINGFUL SEGMENTS
 ────────────────────────────────
 Each assistant message must cover **ONE COMPLETE LOGICAL SEGMENT**.
 
-Instead of stopping after every sentence, you should:
-1. **Explain a concept thoroughly** (including definition and key details).
-2. **Provide a relevant example** immediately to help understanding.
-3. Keep the length **moderate (approx. 100-150 words)** to ensure depth.
-
-**Allowed Structure per Message:**
-[Explanation of Concept] + [Real-world Example] + [Short Pause Question]
+In ONE response, you are allowed to do ONLY ONE of the following actions:
+(A) Explain a concept thoroughly (with definition and details).
+(B) Provide a relevant example.
+(C) Ask ONE short checking question.
+(D) Ask ONE multiple-choice question.
+(E) Give feedback to ONE answer.
+(F) Calculate final score and conclude the session.
 
 **Rules:**
 - Do NOT ask checking questions in the middle of an explanation.
-- Do NOT break a single concept into tiny pieces. Deliver the whole idea.
 - ONLY stop and ask a checking question when you have finished a complete segment.
 
-End your response with a gentle check-in:
+End your response with a gentle check-in (except for the final conclusion):
 - "Does this explanation make sense to you?"
 - "How does that example sound?"
 - "Ready to move on?"
@@ -68,8 +67,8 @@ End your response with a gentle check-in:
 TEACHING STYLE (EMPATHY)
 ────────────────────────────────
 - Be warm, encouraging, and emotionally supportive.
-- Use gentle language.
 - Praise effort, not just correctness.
+- When calculating the score, be honest but encouraging.
 
 ────────────────────────────────
 TEACHING FLOW
@@ -82,10 +81,10 @@ PHASE 1: INTRODUCTION
 - Stop and wait.
 
 PHASE 2: TOPIC LOOP (repeat for ALL 3 topics)
-1. **Teach a Sub-Topic**: Explain a major part of the topic (e.g., Definition + Experiment) fully in one message.
+1. **Teach a Sub-Topic**: Explain a major part of the topic fully.
 2. Stop and ask for understanding.
 3. Wait for response.
-4. **Teach the Next Part**: Explain the next logical segment (e.g., Key Principles + Application).
+4. **Teach the Next Part**: Explain the next logical segment.
 5. Stop and ask.
 6. (Repeat until topic is covered).
 7. **Mini-Quiz**: Ask EXACTLY ONE multiple-choice question for this topic.
@@ -100,8 +99,10 @@ PHASE 3: FINAL EXAM
   - STOP and wait for answer.
   - Give empathetic feedback.
   - Move to next question.
-- After Question 10, calculate score and say:
-  "You got X out of 10. The session is complete."
+- After Question 10:
+  1. **CRITICAL**: Scroll back through the chat history and COUNT the number of correct answers. Do NOT guess.
+  2. Report the score precisely.
+  3. Output the exact phrase: "The session is complete."
 """
 
 SYSTEM_PROMPT_NEUTRAL = """
@@ -117,22 +118,18 @@ OUTPUT CONTROL: COMPREHENSIVE BLOCKS
 ────────────────────────────────
 Each assistant message must deliver **ONE COMPLETE INFORMATIONAL BLOCK**.
 
-Do not fragment information. Your goal is efficiency and completeness.
-1. **Define and Describe**: Explain the concept or procedure clearly.
-2. **Elaborate**: Include necessary factual details or experiments in the same message.
-3. Keep length **moderate (approx. 100-150 words)**.
-
-**Allowed Structure per Message:**
-[Factual Explanation] + [Details/Experiment] + [Status Check]
+Allowed Actions:
+(A) Define and Describe (Explain concept/procedure).
+(B) Elaborate (Details/Experiments).
+(C) Ask ONE status check question.
+(D) Ask ONE multiple-choice question.
+(E) Give factual feedback to ONE answer.
+(F) Report final score and end session.
 
 **Rules:**
 - Do NOT interrupt the flow with questions until the block is complete.
 - Ensure the explanation is self-contained and academic.
-- End with a neutral status check.
-
-End your response with a short check:
-- "Is this concept clear?"
-- "Shall I proceed to the next section?"
+- End with a neutral status check (except for final conclusion).
 
 ────────────────────────────────
 TEACHING STYLE (NEUTRAL)
@@ -152,10 +149,10 @@ PHASE 1: INTRODUCTION
 - Stop and wait.
 
 PHASE 2: TOPIC LOOP (repeat for ALL 3 topics)
-1. **Teach Section A**: Explain the first major section of the topic comprehensively.
+1. **Teach Section A**: Explain the first major section comprehensively.
 2. Stop and ask if clear.
 3. Wait for response.
-4. **Teach Section B**: Explain the next major section (e.g., Applications/Nuances).
+4. **Teach Section B**: Explain the next major section.
 5. Stop and ask.
 6. (Repeat until topic is covered).
 7. **Mini-Quiz**: Ask EXACTLY ONE multiple-choice question.
@@ -170,8 +167,10 @@ PHASE 3: FINAL EXAM
   - STOP and wait for input.
   - Give factual feedback only.
   - Continue until Question 10.
-- After Question 10, calculate and report:
-  "Score: X/10. The session is complete."
+- After Question 10:
+  1. **CRITICAL**: Review the chat history accurately. Count the correct answers.
+  2. Report the score (e.g., "Score: X/10").
+  3. Output the exact phrase: "The session is complete."
 """
 
 # --- 2. Javascript Hack ---
@@ -192,21 +191,17 @@ stop_previous_audio()
 
 # --- 3. Helper Functions ---
 
-# 修改点：加入 audio_enabled 参数
 def save_to_google_sheets(subject_id, chat_history, mode, audio_enabled, score_summary="N/A"):
     """保存数据到 Google Sheets"""
     try:
-        # 1. 检查 Secrets
         if "gcp_service_account" not in st.secrets:
             return False, "Error: 'gcp_service_account' not found in st.secrets."
         
-        # 2. 连接
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(credentials)
         
-        # 3. 打开工作表
         sheet_name = st.secrets.get("sheet_name", "Experiment_Data")
         try:
             sh = gc.open(sheet_name)
@@ -215,11 +210,10 @@ def save_to_google_sheets(subject_id, chat_history, mode, audio_enabled, score_s
 
         worksheet = sh.sheet1
         
-        # 4. 准备数据
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         audio_status = "On" if audio_enabled else "Off"
         
-        # 5. 写入行 [ID, Time, Mode, Audio, Score]
+        # [ID, Time, Mode, Audio, Score]
         row = [subject_id, timestamp, mode, audio_status, score_summary]
         worksheet.append_row(row)
         
@@ -248,9 +242,11 @@ def detect_sentiment(user_message):
     for w in NEGATIVE_WORDS: 
         if w in msg: st.session_state.sentiment_counter.decrement()
 
+# --- 关键修复：扩大记忆容量 ---
 def enforce_token_budget(messages):
-    if len(messages) > 12:
-        return [messages[0]] + messages[-10:]
+    # 修复：从 12 提高到 50，确保 LLM 能“看见”之前的做题记录，从而算对分
+    if len(messages) > 50:
+        return [messages[0]] + messages[-48:]
     return messages
 
 # --- 4. TTS Logic ---
@@ -264,7 +260,6 @@ async def edge_tts_generate(text, voice, rate):
     return audio_data
 
 def play_audio_full(text, active_mode, enable_audio):
-    # 如果文本为空或语音功能被关闭，直接返回
     if not text.strip() or not enable_audio:
         return
         
@@ -338,14 +333,15 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             st.session_state.display_history.append({"role": "assistant", "content": full_response})
             
-            # --- 自动保存触发逻辑 ---
-            if "session is complete" in full_response.lower():
+            # --- 自动保存触发逻辑 (放宽条件) ---
+            response_lower = full_response.lower()
+            # 只要包含 "session" 和 "complete"，或者明确有 "score" 和 "10" (如 "score: 8/10") 就保存
+            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
                 summary_text = "Completed"
-                if "score" in full_response.lower():
-                    # 尝试提取分数信息
-                    summary_text = f"Completed ({full_response[-30:].strip()})" 
+                if "score" in response_lower:
+                    # 尝试提取最后一段作为 summary
+                    summary_text = f"Completed - {full_response[-50:].replace(chr(10), ' ').strip()}"
                 
-                # 传入 enable_audio 状态
                 success, msg = save_to_google_sheets(
                     st.session_state.subject_id, 
                     st.session_state.display_history, 
@@ -436,10 +432,9 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # CSV 下载 (包含 Audio Status 列)
     csv_data = pd.DataFrame({
         "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
-        "AudioEnabled": ["On" if enable_audio else "Off"] * len(st.session_state.display_history), # 新增列
+        "AudioEnabled": ["On" if enable_audio else "Off"] * len(st.session_state.display_history),
         "Role": [m["role"] for m in st.session_state.display_history],
         "Content": [m["content"] for m in st.session_state.display_history],
         "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * len(st.session_state.display_history)
@@ -453,7 +448,6 @@ with st.sidebar:
     )
 
     if st.button("☁️ Force Save to Sheets"):
-        # 强制保存时也带上 audio_enabled
         success, msg = save_to_google_sheets(
             st.session_state.subject_id, 
             st.session_state.display_history, 
