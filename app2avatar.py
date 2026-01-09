@@ -33,15 +33,16 @@ VOICE_NEUTRAL = "en-US-ChristopherNeural"
 
 # --- Prompt Definitions ---
 
-# 修改点：3个Topic，10道题，Chunking打断，Mini-Quiz，同理心反馈
+# 修改点：强调深度教学，通过分段+询问来控制节奏，而不是缩减内容
 SYSTEM_PROMPT_EMPATHY = (
     "You are Sophia, a supportive and warm psychology teacher. Your goal is to teach 3 topics step-by-step: "
     "1. Classical Conditioning, 2. Operant Conditioning, 3. Memory Types."
     "\n\n"
-    "### IMPORTANT: INTERACTIVE CHUNKING"
-    "\n- **Length Control**: Aim for moderate chunks (around 4 sentences) that cover one complete idea."
-    "\n- **Avoid Over-Chunking**: Do not break the flow unnecessarily. Only stop if you are shifting to a new complex idea."
-    "\n- **Checking**: Instead of asking 'Are you with me?' every time, simply pause and wait for the user to acknowledge or ask a question before moving to the next part."
+    "### IMPORTANT: PACING & DEPTH (STRICT RULE)"
+    "\n- **Aim for Depth**: Do NOT sacrifice detail for brevity. Explain concepts thoroughly and vividly."
+    "\n- **Chunking for Clarity**: Since psychology concepts can be complex, do not dump a long lecture at once. **Split** your detailed explanation into 2 or 3 logical segments."
+    "\n- **The Checkpoint**: After delivering one segment (e.g., the definition or the first part of an experiment), **STOP** and ask a gentle checking question (e.g., 'Are you following so far?', 'Does that example make sense?')."
+    "\n- **Wait** for the user's response before delivering the next segment of the same topic."
     "\n\n"
     "### INSTRUCTION FLOW:"
     "\n\n"
@@ -50,13 +51,13 @@ SYSTEM_PROMPT_EMPATHY = (
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
     "**PHASE 2: TEACHING LOOP (Repeat for ALL 3 topics)**\n"
-    "1. **Teach Concept (Chunked)**: Explain the concept using the 'Interactive Chunking' rule above.\n"
-    "2. **Mini-Quiz**: AFTER the concept is fully taught, give **1 multiple-choice question** about this topic immediately.\n"
-    "3. **Feedback**: Praise warmly if correct (e.g., 'That's wonderful!', 'You're doing great!'). If wrong, be very gentle and encouraging (e.g., 'Not quite, but that's a tricky one. The right answer is...').\n"
+    "1. **Teach Concept (Segmented)**: Explain the concept in depth, but use the 'Pacing & Depth' rule to break it up.\n"
+    "2. **Mini-Quiz**: AFTER the concept is fully explained (all segments done), give **1 multiple-choice question** about this topic.\n"
+    "3. **Feedback**: Praise warmly if correct. If wrong, be very gentle and encouraging.\n"
     "4. **Transition**: Ask if ready for the NEXT topic."
     "\n\n"
     "**PHASE 3: SUMMATIVE EXAM (Final Phase)**\n"
-    "- Trigger this ONLY after all 3 topics (and their mini-quizzes) are finished.\n"
+    "- Trigger this ONLY after all 3 topics are finished.\n"
     "- Say: 'Now that we have finished all topics, let's take the final exam. I will ask 10 questions one by one.'\n"
     "- **Exam Rules**:\n"
     "  1. Ask **ONE** multiple-choice question (Options A, B, C, D).\n"
@@ -70,19 +71,20 @@ SYSTEM_PROMPT_NEUTRAL = (
     "You are a neutral, factual AI instructor. Your goal is to teach exactly these 3 specific Psychology topics: "
     "1. Classical Conditioning (Pavlov), 2. Operant Conditioning (Skinner), 3. Memory Types."
     "\n\n"
-    "### IMPORTANT: PACING AND LENGTH"
-    "\n- Provide concise but complete explanations for each sub-concept (approx. 100 words)."
-    "\n- **Do not** split text into tiny fragments. Deliver a coherent paragraph."
-    "\n- After explaining a key concept, pause and ask: 'Shall we proceed to the next point?' only when necessary to confirm understanding."
+    "### IMPORTANT: PACING & STRUCTURE"
+    "\n- **Comprehensive Explanation**: Provide detailed, factual explanations. Do not simplify unnecessarily."
+    "\n- **Segmented Delivery**: If a topic involves multiple steps (e.g., an experiment procedure), present it in logical parts."
+    "\n- **Pause Points**: After presenting a significant part of the information, pause and ask: 'Shall I proceed to the next part?' or 'Is this clear?' to ensure the user is ready."
     "\n\n"
     "### INSTRUCTION FLOW:"
+    "\n\n"
     "**PHASE 1: INTRODUCTION**\n"
     "- Briefly introduce yourself and list the 3 topics strictly.\n"
     "- Ask if the student is ready to begin Topic 1."
     "\n\n"
     "**PHASE 2: TEACHING LOOP (Repeat for ALL 3 topics)**\n"
-    "1. **Teach Concept**: Explain strictly factually using chunking.\n"
-    "2. **Mini-Quiz**: Present 1 multiple-choice question to test the concept immediately.\n"
+    "1. **Teach Concept**: Explain strictly factually. Use pauses to manage long texts.\n"
+    "2. **Mini-Quiz**: Present 1 multiple-choice question to test the concept immediately after teaching.\n"
     "3. **Feedback**: State 'Correct' or 'Incorrect' and provide the correct answer neutrally.\n"
     "4. **Transition**: Move to the NEXT topic immediately."
     "\n\n"
@@ -115,7 +117,6 @@ stop_previous_audio()
 
 # --- 3. Helper Functions ---
 
-# 修改点：加入 mode 参数，调整 Row 结构
 def save_to_google_sheets(subject_id, chat_history, mode, score_summary="N/A"):
     """保存数据到 Google Sheets"""
     try:
@@ -140,8 +141,6 @@ def save_to_google_sheets(subject_id, chat_history, mode, score_summary="N/A"):
         
         # 4. 准备数据
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # 不需要 json dump history 这一列了，根据您的要求只留前几列
-        # history_json = json.dumps(chat_history, ensure_ascii=False) 
         
         # 5. 写入行 [ID, Time, Mode, Score]
         row = [subject_id, timestamp, mode, score_summary]
@@ -187,9 +186,8 @@ async def edge_tts_generate(text, voice, rate):
             audio_data += chunk["data"]
     return audio_data
 
-# 修改点：加入 enable_audio 开关判断，移除 Toast
 def play_audio_full(text, active_mode, enable_audio):
-    # 1. 如果文本为空或语音功能被关闭，直接返回
+    # 如果文本为空或语音功能被关闭，直接返回
     if not text.strip() or not enable_audio:
         return
         
@@ -206,9 +204,6 @@ def play_audio_full(text, active_mode, enable_audio):
         st.session_state.audio_container.empty()
 
     try:
-        # 移除 Toast 提示
-        # st.toast(f"Speaking: {voice} at {current_rate}", icon=icon)
-        
         with st.spinner(f"🔊 Generating audio..."):
             audio_bytes = asyncio.run(edge_tts_generate(clean_text, voice, current_rate))
     except Exception as e:
@@ -268,14 +263,10 @@ def handle_bot_response(user_input, chat_container, active_mode, enable_audio):
             
             # --- 自动保存触发逻辑 ---
             if "session is complete" in full_response.lower():
-                # 尝试从文本中提取分数（简单提取）作为 summary，或者直接用 "Completed"
-                # 为了更准确，我们可以直接把最后这句回复当做 summary 存进去，人工后续在 sheet 里看
-                # 或者，这里直接存 "Completed" + 最后的 Response
                 summary_text = "Completed"
                 if "score" in full_response.lower():
                     summary_text = f"Completed (Check History for Score)"
                 
-                # 传入 active_mode
                 success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, active_mode, summary_text)
                 if success:
                     st.success("✅ Session Data Successfully Saved to Google Sheets!")
@@ -330,7 +321,7 @@ with st.sidebar:
     if input_id != st.session_state.subject_id:
         st.session_state.subject_id = input_id
     
-    # 修改点：加入语音开关
+    # 语音开关
     enable_audio = st.checkbox("🔊 Enable Audio", value=True)
     
     if not st.session_state.experiment_started:
@@ -360,7 +351,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # CSV 下载保持不变，但内容已符合要求
+    # CSV 下载
     csv_data = pd.DataFrame({
         "SubjectID": [st.session_state.subject_id] * len(st.session_state.display_history),
         "Role": [m["role"] for m in st.session_state.display_history],
@@ -376,7 +367,6 @@ with st.sidebar:
     )
 
     if st.button("☁️ Force Save to Sheets"):
-        # 强制保存时也带上 mode
         success, msg = save_to_google_sheets(st.session_state.subject_id, st.session_state.display_history, st.session_state.active_mode, "Manual Save")
         if success:
             st.success("Saved!")
