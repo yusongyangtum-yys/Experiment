@@ -100,10 +100,11 @@ PHASE 3: FINAL EXAM
   - Ask ONE multiple-choice question at a time.
   - STOP and wait for answer.
   - Give empathetic feedback (Must start with [CORRECT] or [INCORRECT]).
-  - Move to next question.
-- After Question 10:
-  - Output EXACTLY: "The session is complete."
-  - (Do not report the score yourself; the system will display the accurate count based on your tags.)
+  - Move to next question immediately.
+- **CRITICAL ENDING RULE (After Question 10):**
+  - **Do NOT summarize the score.**
+  - **Do NOT mention how many questions were correct.**
+  - Output EXACTLY: "The session is complete. Thank you for your participation."
 """
 
 SYSTEM_PROMPT_NEUTRAL = """
@@ -178,9 +179,10 @@ PHASE 3: FINAL EXAM
   - STOP and wait for input.
   - Give factual feedback (Must start with [CORRECT] or [INCORRECT]).
   - Continue until Question 10.
-- After Question 10:
-  - Output EXACTLY: "The session is complete."
-  - (Do not report the score yourself; the system will display the accurate count.)
+- **CRITICAL ENDING RULE (After Question 10):**
+  - **Do NOT summarize the score.**
+  - **Do NOT mention how many questions were correct.**
+  - Output EXACTLY: "The session is complete. Thank you for your participation."
 """
 
 # --- 2. Helper Functions ---
@@ -282,37 +284,41 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     full_response += txt
                     chat_placeholder.markdown(full_response + "▌")
             
+            # 如果检测到开始 Final Exam，重置分数
             if "begin the final exam" in full_response.lower():
                 st.session_state.correct_count = 0
 
             clean_display_response = full_response
             
+            # 处理 Tag 计分
             if "[CORRECT]" in full_response:
                 st.session_state.correct_count += 1
                 clean_display_response = full_response.replace("[CORRECT]", "").strip()
             elif "[INCORRECT]" in full_response:
                 clean_display_response = full_response.replace("[INCORRECT]", "").strip()
             
+            # 更新显示的文字（去除Tag后）
             chat_placeholder.markdown(clean_display_response)
             
             st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
             
-            # --- 结算逻辑 ---
+            # --- 结算逻辑 (已修改：不显示分数) ---
             response_lower = full_response.lower()
-            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
+            
+            # 判定实验结束的条件：AI 说 "session is complete"
+            if "session is complete" in response_lower:
                 final_score = st.session_state.correct_count
                 
-                st.info(f"📊 Final Score: {final_score}/10")
-                
-                # 保存简化版数据: ID, Mode, Time, Score
+                # 保存简化版数据: ID, Mode, Time, Score 到后台
                 success, msg = save_to_google_sheets(
                     st.session_state.subject_id, 
                     active_mode, 
                     final_score
                 )
                 if success:
-                    st.success("✅ Experiment Complete. Data Saved.")
+                    # 只显示实验结束，不显示分数
+                    st.success("✅ Experiment Complete. Thank you for your participation!")
                     st.balloons()
                 else:
                     st.error(f"Save Failed: {msg}")
