@@ -208,7 +208,6 @@ def save_to_google_sheets(data_dict):
         worksheet = sh.sheet1
         
         # 构建完整的数据行
-        # Schema: [UUID, Mode, StartTime, Duration(s), Score, Sentiment, WordCount, AvgRespTime, Turns, Confusion, Dialogue]
         row = [
             str(data_dict.get("uuid")),
             str(data_dict.get("mode")),
@@ -241,25 +240,17 @@ class SafeCounter:
     def reset(self): self.value = 0
 
 if "sentiment_counter" not in st.session_state: st.session_state.sentiment_counter = SafeCounter()
-if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0 # 记录困惑次数
+if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0
 
 def detect_sentiment(user_message):
-    """
-    检测情感并统计困惑次数
-    """
     msg = user_message.lower()
-    
-    # 情感计分
     for w in POSITIVE_WORDS: 
         if w in msg: st.session_state.sentiment_counter.increment()
-    
-    # 困惑与负面计分
     is_confused = False
     for w in NEGATIVE_WORDS: 
         if w in msg: 
             st.session_state.sentiment_counter.decrement()
             is_confused = True
-            
     if is_confused:
         st.session_state.confusion_counter += 1
 
@@ -274,9 +265,7 @@ def handle_bot_response(user_input, chat_container, active_mode):
     # --- Metric: User Response Time Logic ---
     current_time = datetime.datetime.now()
     if st.session_state.last_bot_finish_time:
-        # 计算从上一条Bot消息结束到现在的秒数
         time_diff = (current_time - st.session_state.last_bot_finish_time).total_seconds()
-        # 过滤掉异常长的时间（比如用户去吃了个饭，大于5分钟不计入平均）
         if time_diff < 300: 
             st.session_state.user_response_times.append(time_diff)
 
@@ -340,24 +329,19 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 start_time = st.session_state.session_start_time
                 duration_seconds = (end_time - start_time).total_seconds()
                 
-                # 情感分
                 sentiment_val = st.session_state.sentiment_counter.value
                 
-                # 平均响应时间
                 if len(st.session_state.user_response_times) > 0:
                     avg_resp_time = statistics.mean(st.session_state.user_response_times)
                 else:
                     avg_resp_time = 0
                 
-                # 轮数 (Turn Count) - User messages count
                 turn_count = len([m for m in st.session_state.messages if m["role"] == "user"])
                 
-                # 困惑率 (Confusion Rate) = Confusion Count / Turn Count
                 confusion_rate = 0
                 if turn_count > 0:
                     confusion_rate = st.session_state.confusion_counter / turn_count
                 
-                # 完整对话 JSON
                 dialogue_dump = json.dumps(st.session_state.messages, ensure_ascii=False)
 
                 st.info(f"📊 Final Score: {final_score}/10 | Time: {int(duration_seconds)}s")
@@ -381,8 +365,30 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 success, msg = save_to_google_sheets(data_payload)
                 
                 if success:
-                    st.success("✅ Experiment Complete. All metrics saved successfully.")
+                    st.success("✅ Session Complete! Data saved.")
                     st.balloons()
+                    
+                    # === Post-Survey Link Generation ===
+                    # 替换为你提供的 Post-Survey ID (entry.596968100)
+                    POST_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSckI_yCbL5gQu6P7aP-9vRn5BKp7fX8NrBA_z3FmEegIggCTg/viewform"
+                    POST_ENTRY_ID = "entry.596968100"
+                    
+                    final_post_url = f"{POST_BASE}?usp=pp_url&{POST_ENTRY_ID}={st.session_state.subject_id}"
+
+                    st.markdown("---")
+                    st.markdown("### 👇 Next Step: Final Survey")
+                    st.info("Great job! Please complete the final survey to finish the experiment.")
+                    
+                    st.markdown(f"""
+                    <a href="{final_post_url}" target="_blank" style="text-decoration:none;">
+                        <div style="
+                            background-color: #008CBA; color: white; padding: 15px; 
+                            text-align: center; border-radius: 8px; font-weight: bold; font-size: 18px;
+                        ">
+                            👉 Click Here to Take Post-Survey
+                        </div>
+                    </a>
+                    """, unsafe_allow_html=True)
                 else:
                     st.error(f"Save Failed: {msg}")
 
@@ -403,6 +409,18 @@ if "subject_id" not in st.session_state:
     auto_id = str(uuid.uuid4())[:8]
     st.session_state.subject_id = f"SUB_{auto_id}"
 
+# --- Pre-Survey Status Check ---
+if "pre_survey_completed" not in st.session_state:
+    st.session_state.pre_survey_completed = False
+
+# --- Pre-Survey Link Construction ---
+# 替换为你提供的 Pre-Survey ID (entry.538559089)
+PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
+PRE_SURVEY_ENTRY_ID = "entry.538559089"
+
+pre_survey_url = f"{PRE_SURVEY_BASE}?usp=pp_url&{PRE_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
+
+
 if "active_mode" not in st.session_state:
     hash_object = hashlib.md5(st.session_state.subject_id.encode())
     hash_int = int(hash_object.hexdigest(), 16)
@@ -413,16 +431,16 @@ if "active_mode" not in st.session_state:
 
 # --- Metrics Initialization ---
 if "session_start_time" not in st.session_state:
-    st.session_state.session_start_time = datetime.datetime.now() # 记录开始时间
+    st.session_state.session_start_time = datetime.datetime.now()
 
 if "user_response_times" not in st.session_state:
-    st.session_state.user_response_times = [] # 列表记录每次响应时长
+    st.session_state.user_response_times = []
 
 if "last_bot_finish_time" not in st.session_state:
-    st.session_state.last_bot_finish_time = datetime.datetime.now() # 初始化为开始时间
+    st.session_state.last_bot_finish_time = datetime.datetime.now()
 
 if "user_total_words" not in st.session_state:
-    st.session_state.user_total_words = 0 # 总词数
+    st.session_state.user_total_words = 0
 
 # --- System Prompt Init ---
 if "messages" not in st.session_state:
@@ -434,83 +452,117 @@ if "display_history" not in st.session_state:
 if "correct_count" not in st.session_state:
     st.session_state.correct_count = 0
 
-# --- 5. Main UI ---
+# --- 5. Main UI Logic ---
 
-st.title("🧠 Psychology Learning Session")
-
-col_avatar, col_chat = st.columns([1, 2])
-
-# 3D Model
-YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
-LOCAL_GLB_PATH = "cached_model.glb"
-
-@st.cache_resource
-def get_glb_base64(url, local_path):
-    if not os.path.exists(local_path):
-        try:
-            r = requests.get(url, stream=True)
-            with open(local_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-        except: return None
-    with open(local_path, "rb") as f:
-        return base64.b64encode(f.read()).decode('utf-8')
-
-glb_data = get_glb_base64(YOUR_GLB_URL, LOCAL_GLB_PATH)
-if glb_data:
-    src = f"data:model/gltf-binary;base64,{glb_data}"
-    html = f"""
-    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-    <model-viewer 
-        src="{src}" camera-controls autoplay animation-name="*" shadow-intensity="1" 
-        style="width:100%;height:520px;" interaction-prompt="none"
-    ></model-viewer>
-    """
-    with col_avatar: 
-        components.html(html, height=540)
-
-with col_chat:
-    chat_container = st.container(height=520)
-    locked_mode = st.session_state.active_mode
-
-    # 显示历史记录
-    with chat_container:
-        for msg in st.session_state.display_history:
-            avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
-            st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
-
-    # 自动触发第一句话 (Auto Start)
-    if len(st.session_state.display_history) == 0:
-        trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
-        has_assistant_reply = any(m["role"] == "assistant" for m in st.session_state.messages)
-        
-        if not has_assistant_reply:
-            st.session_state.messages.append({"role": "system", "content": trigger_msg})
-            # 这里调用一次，但不算用户时间
-            st.session_state.last_bot_finish_time = datetime.datetime.now() 
-            handle_bot_response("", chat_container, locked_mode)
-            st.rerun() 
-
-    # 用户输入
-    user_input = st.chat_input("Type your response here...")
+# 【逻辑分支 1：如果没做完 Pre-Survey，显示引导页】
+if not st.session_state.pre_survey_completed:
+    st.container().markdown("<br><br>", unsafe_allow_html=True) # Spacer
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    if user_input:
+    with col2:
+        st.title("🎓 Psychology Learning Experiment")
+        st.info("👋 Welcome! Before we begin the session with the AI teacher, please complete a short survey.")
+        st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-filled)")
+        
+        # 按钮链接到 Pre-Survey
+        st.markdown(f"""
+        <a href="{pre_survey_url}" target="_blank" style="text-decoration:none;">
+            <div style="
+                background-color: #4CAF50; color: white; padding: 20px; text-align: center;
+                border-radius: 8px; font-size: 18px; margin: 20px 0; font-weight: bold;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                👉 Click Here to Start Pre-Survey
+            </div>
+        </a>
+        """, unsafe_allow_html=True)
+        
+        st.warning("⚠️ Please keep this tab open. After submitting the Google Form, return here and click the button below.")
+        
+        st.write("---")
+        
+        # 确认按钮
+        if st.button("I have submitted the Pre-Survey"):
+            st.session_state.pre_survey_completed = True
+            st.rerun()
+
+# 【逻辑分支 2：Avatar 互动环节】
+else:
+    st.title("🧠 Psychology Learning Session")
+
+    col_avatar, col_chat = st.columns([1, 2])
+
+    # 3D Model
+    YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
+    LOCAL_GLB_PATH = "cached_model.glb"
+
+    @st.cache_resource
+    def get_glb_base64(url, local_path):
+        if not os.path.exists(local_path):
+            try:
+                r = requests.get(url, stream=True)
+                with open(local_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
+            except: return None
+        with open(local_path, "rb") as f:
+            return base64.b64encode(f.read()).decode('utf-8')
+
+    glb_data = get_glb_base64(YOUR_GLB_URL, LOCAL_GLB_PATH)
+    if glb_data:
+        src = f"data:model/gltf-binary;base64,{glb_data}"
+        html = f"""
+        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+        <model-viewer 
+            src="{src}" camera-controls autoplay animation-name="*" shadow-intensity="1" 
+            style="width:100%;height:520px;" interaction-prompt="none"
+        ></model-viewer>
+        """
+        with col_avatar: 
+            components.html(html, height=540)
+
+    with col_chat:
+        chat_container = st.container(height=520)
+        locked_mode = st.session_state.active_mode
+
+        # 显示历史记录
         with chat_container:
-            st.chat_message("user", avatar="👤").write(user_input)
-            st.session_state.display_history.append({"role": "user", "content": user_input})
+            for msg in st.session_state.display_history:
+                avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
+                st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
+
+        # 自动触发第一句话 (Auto Start)
+        if len(st.session_state.display_history) == 0:
+            trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
+            has_assistant_reply = any(m["role"] == "assistant" for m in st.session_state.messages)
             
-            # --- Analysis Logic ---
-            detect_sentiment(user_input)
-            
-            # Sentiment based instruction
-            sentiment_val = st.session_state.sentiment_counter.value
-            system_instruction = ""
-            if locked_mode == "Empathy Mode":
-                if sentiment_val <= -2:
-                    system_instruction = f"(System: User discouraged (Score {sentiment_val}). Be extra encouraging!) "
-                elif sentiment_val >= 2:
-                    system_instruction = f"(System: User confident. Keep going.) "
-            
-            final_prompt = system_instruction + user_input
-            
-            # 调用处理函数（在这里计算响应时间和其他指标）
-            handle_bot_response(final_prompt, chat_container, locked_mode)
+            if not has_assistant_reply:
+                st.session_state.messages.append({"role": "system", "content": trigger_msg})
+                # 这里调用一次，但不算用户时间
+                st.session_state.last_bot_finish_time = datetime.datetime.now() 
+                handle_bot_response("", chat_container, locked_mode)
+                st.rerun() 
+
+        # 用户输入
+        user_input = st.chat_input("Type your response here...")
+        
+        if user_input:
+            with chat_container:
+                st.chat_message("user", avatar="👤").write(user_input)
+                st.session_state.display_history.append({"role": "user", "content": user_input})
+                
+                # --- Analysis Logic ---
+                detect_sentiment(user_input)
+                
+                # Sentiment based instruction
+                sentiment_val = st.session_state.sentiment_counter.value
+                system_instruction = ""
+                if locked_mode == "Empathy Mode":
+                    if sentiment_val <= -2:
+                        system_instruction = f"(System: User discouraged (Score {sentiment_val}). Be extra encouraging!) "
+                    elif sentiment_val >= 2:
+                        system_instruction = f"(System: User confident. Keep going.) "
+                
+                final_prompt = system_instruction + user_input
+                
+                # 调用处理函数
+                handle_bot_response(final_prompt, chat_container, locked_mode)
