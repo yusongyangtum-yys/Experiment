@@ -10,6 +10,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import uuid 
 import hashlib
+import statistics
 
 # --- 1. Configuration ---
 
@@ -25,7 +26,7 @@ MODEL = "gpt-4o-mini"
 MAX_TOKENS = 800 
 TEMPERATURE = 0.5   
 
-# --- Prompt Definitions ---
+# --- Prompt Definitions (UNCHANGED) ---
 
 SYSTEM_PROMPT_EMPATHY = """
 You are Sophia, a supportive, warm, and patient psychology teacher.
@@ -100,11 +101,10 @@ PHASE 3: FINAL EXAM
   - Ask ONE multiple-choice question at a time.
   - STOP and wait for answer.
   - Give empathetic feedback (Must start with [CORRECT] or [INCORRECT]).
-  - Move to next question immediately.
-- **CRITICAL ENDING RULE (After Question 10):**
-  - **Do NOT summarize the score.**
-  - **Do NOT mention how many questions were correct.**
-  - Output EXACTLY: "The session is complete. Thank you for your participation."
+  - Move to next question.
+- After Question 10:
+  - Output EXACTLY: "The session is complete."
+  - (Do not report the score yourself; the system will display the accurate count based on your tags.)
 """
 
 SYSTEM_PROMPT_NEUTRAL = """
@@ -179,18 +179,16 @@ PHASE 3: FINAL EXAM
   - STOP and wait for input.
   - Give factual feedback (Must start with [CORRECT] or [INCORRECT]).
   - Continue until Question 10.
-- **CRITICAL ENDING RULE (After Question 10):**
-  - **Do NOT summarize the score.**
-  - **Do NOT mention how many questions were correct.**
-  - Output EXACTLY: "The session is complete. Thank you for your participation."
+- After Question 10:
+  - Output EXACTLY: "The session is complete."
+  - (Do not report the score yourself; the system will display the accurate count.)
 """
 
 # --- 2. Helper Functions ---
 
-def save_to_google_sheets(subject_id, mode, final_score):
+def save_to_google_sheets(data_dict):
     """
-    保存数据到 Google Sheets
-    Schema: [UUID, Mode, FinishTime, Score]
+    保存详细数据到 Google Sheets
     """
     try:
         if "gcp_service_account" not in st.secrets:
@@ -209,19 +207,29 @@ def save_to_google_sheets(subject_id, mode, final_score):
 
         worksheet = sh.sheet1
         
-        # 获取当前时间
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 构建完整的数据行
+        # Schema: [UUID, Mode, StartTime, Duration(s), Score, Sentiment, WordCount, AvgRespTime, Turns, Confusion, Dialogue]
+        row = [
+            str(data_dict.get("uuid")),
+            str(data_dict.get("mode")),
+            str(data_dict.get("start_time")),
+            str(data_dict.get("duration")),
+            str(data_dict.get("score")),
+            str(data_dict.get("sentiment_score")),
+            str(data_dict.get("user_word_count")),
+            str(data_dict.get("avg_response_time")),
+            str(data_dict.get("turn_count")),
+            str(data_dict.get("confusion_rate")),
+            str(data_dict.get("dialogue_json"))
+        ]
         
-        # 构建简化的数据行
-        row = [str(subject_id), str(mode), str(timestamp), str(final_score)]
         worksheet.append_row(row)
-        
         return True, "Success"
     except Exception as e:
         return False, str(e)
 
 POSITIVE_WORDS = ["good", "great", "excellent", "ready", "yes", "understand", "clear"]
-NEGATIVE_WORDS = ["bad", "hard", "don't understand", "no", "confused", "wait"]
+NEGATIVE_WORDS = ["bad", "hard", "don't understand", "no", "confused", "wait", "what?", "difficult"]
 
 class SafeCounter:
     def __init__(self, min_val=-10, max_val=10):
@@ -231,22 +239,29 @@ class SafeCounter:
     def increment(self): self.value = min(self.max_val, self.value + 1)
     def decrement(self): self.value = max(self.min_val, self.value - 1)
     def reset(self): self.value = 0
-    def add_correct(self):
-        if "correct_count" not in st.session_state:
-            st.session_state.correct_count = 0
-        st.session_state.correct_count += 1
-    def get_correct(self):
-        return st.session_state.get("correct_count", 0)
 
 if "sentiment_counter" not in st.session_state: st.session_state.sentiment_counter = SafeCounter()
-if "correct_count" not in st.session_state: st.session_state.correct_count = 0
+if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0 # 记录困惑次数
 
 def detect_sentiment(user_message):
+    """
+    检测情感并统计困惑次数
+    """
     msg = user_message.lower()
+    
+    # 情感计分
     for w in POSITIVE_WORDS: 
         if w in msg: st.session_state.sentiment_counter.increment()
+    
+    # 困惑与负面计分
+    is_confused = False
     for w in NEGATIVE_WORDS: 
-        if w in msg: st.session_state.sentiment_counter.decrement()
+        if w in msg: 
+            st.session_state.sentiment_counter.decrement()
+            is_confused = True
+            
+    if is_confused:
+        st.session_state.confusion_counter += 1
 
 def enforce_token_budget(messages):
     if len(messages) > 60:
@@ -256,7 +271,19 @@ def enforce_token_budget(messages):
 # --- 3. Logic ---
 
 def handle_bot_response(user_input, chat_container, active_mode):
-    if user_input: 
+    # --- Metric: User Response Time Logic ---
+    current_time = datetime.datetime.now()
+    if st.session_state.last_bot_finish_time:
+        # 计算从上一条Bot消息结束到现在的秒数
+        time_diff = (current_time - st.session_state.last_bot_finish_time).total_seconds()
+        # 过滤掉异常长的时间（比如用户去吃了个饭，大于5分钟不计入平均）
+        if time_diff < 300: 
+            st.session_state.user_response_times.append(time_diff)
+
+    # --- Metric: User Word Count ---
+    if user_input:
+        word_count = len(user_input.split())
+        st.session_state.user_total_words += word_count
         st.session_state.messages.append({"role": "user", "content": user_input})
     
     with chat_container:
@@ -284,41 +311,77 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     full_response += txt
                     chat_placeholder.markdown(full_response + "▌")
             
-            # 如果检测到开始 Final Exam，重置分数
+            # --- Metric: Update Last Bot Finish Time ---
+            st.session_state.last_bot_finish_time = datetime.datetime.now()
+
             if "begin the final exam" in full_response.lower():
                 st.session_state.correct_count = 0
 
             clean_display_response = full_response
             
-            # 处理 Tag 计分
             if "[CORRECT]" in full_response:
                 st.session_state.correct_count += 1
                 clean_display_response = full_response.replace("[CORRECT]", "").strip()
             elif "[INCORRECT]" in full_response:
                 clean_display_response = full_response.replace("[INCORRECT]", "").strip()
             
-            # 更新显示的文字（去除Tag后）
             chat_placeholder.markdown(clean_display_response)
             
             st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
             
-            # --- 结算逻辑 (已修改：不显示分数) ---
+            # --- 结算逻辑 ---
             response_lower = full_response.lower()
-            
-            # 判定实验结束的条件：AI 说 "session is complete"
-            if "session is complete" in response_lower:
-                final_score = st.session_state.correct_count
+            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
                 
-                # 保存简化版数据: ID, Mode, Time, Score 到后台
-                success, msg = save_to_google_sheets(
-                    st.session_state.subject_id, 
-                    active_mode, 
-                    final_score
-                )
+                # 1. 计算所有指标
+                final_score = st.session_state.correct_count
+                end_time = datetime.datetime.now()
+                start_time = st.session_state.session_start_time
+                duration_seconds = (end_time - start_time).total_seconds()
+                
+                # 情感分
+                sentiment_val = st.session_state.sentiment_counter.value
+                
+                # 平均响应时间
+                if len(st.session_state.user_response_times) > 0:
+                    avg_resp_time = statistics.mean(st.session_state.user_response_times)
+                else:
+                    avg_resp_time = 0
+                
+                # 轮数 (Turn Count) - User messages count
+                turn_count = len([m for m in st.session_state.messages if m["role"] == "user"])
+                
+                # 困惑率 (Confusion Rate) = Confusion Count / Turn Count
+                confusion_rate = 0
+                if turn_count > 0:
+                    confusion_rate = st.session_state.confusion_counter / turn_count
+                
+                # 完整对话 JSON
+                dialogue_dump = json.dumps(st.session_state.messages, ensure_ascii=False)
+
+                st.info(f"📊 Final Score: {final_score}/10 | Time: {int(duration_seconds)}s")
+                
+                # 2. 准备数据字典
+                data_payload = {
+                    "uuid": st.session_state.subject_id,
+                    "mode": active_mode,
+                    "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": int(duration_seconds),
+                    "score": final_score,
+                    "sentiment_score": sentiment_val,
+                    "user_word_count": st.session_state.user_total_words,
+                    "avg_response_time": round(avg_resp_time, 2),
+                    "turn_count": turn_count,
+                    "confusion_rate": round(confusion_rate, 2),
+                    "dialogue_json": dialogue_dump
+                }
+                
+                # 3. 保存
+                success, msg = save_to_google_sheets(data_payload)
+                
                 if success:
-                    # 只显示实验结束，不显示分数
-                    st.success("✅ Experiment Complete. Thank you for your participation!")
+                    st.success("✅ Experiment Complete. All metrics saved successfully.")
                     st.balloons()
                 else:
                     st.error(f"Save Failed: {msg}")
@@ -334,31 +397,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 核心修改：ID生成与自动平衡 Mode 分配 ---
+# --- ID生成与模式分配 ---
 
 if "subject_id" not in st.session_state:
-    # 1. 生成随机 8位 ID
     auto_id = str(uuid.uuid4())[:8]
     st.session_state.subject_id = f"SUB_{auto_id}"
 
 if "active_mode" not in st.session_state:
-    # 2. 确定性哈希分配 (Deterministic Hashing)
-    # 将 ID 转为哈希整数，对 2 取余。
-    # 结果 0 -> Empathy, 1 -> Neutral
-    # 这确保了同一个 ID 永远对应同一个模式，且在大样本下概率为 50/50。
-    
     hash_object = hashlib.md5(st.session_state.subject_id.encode())
     hash_int = int(hash_object.hexdigest(), 16)
-    
     if hash_int % 2 == 0:
         st.session_state.active_mode = "Empathy Mode"
     else:
         st.session_state.active_mode = "Neutral Mode"
-        
-    # 可选：打印日志用于后台调试
-    # print(f"Assigned {st.session_state.subject_id} to {st.session_state.active_mode}")
 
-# 3. 初始化 System Prompt
+# --- Metrics Initialization ---
+if "session_start_time" not in st.session_state:
+    st.session_state.session_start_time = datetime.datetime.now() # 记录开始时间
+
+if "user_response_times" not in st.session_state:
+    st.session_state.user_response_times = [] # 列表记录每次响应时长
+
+if "last_bot_finish_time" not in st.session_state:
+    st.session_state.last_bot_finish_time = datetime.datetime.now() # 初始化为开始时间
+
+if "user_total_words" not in st.session_state:
+    st.session_state.user_total_words = 0 # 总词数
+
+# --- System Prompt Init ---
 if "messages" not in st.session_state:
     prompt = SYSTEM_PROMPT_EMPATHY if st.session_state.active_mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
     st.session_state.messages = [{"role": "system", "content": prompt}]
@@ -419,6 +485,8 @@ with col_chat:
         
         if not has_assistant_reply:
             st.session_state.messages.append({"role": "system", "content": trigger_msg})
+            # 这里调用一次，但不算用户时间
+            st.session_state.last_bot_finish_time = datetime.datetime.now() 
             handle_bot_response("", chat_container, locked_mode)
             st.rerun() 
 
@@ -430,9 +498,11 @@ with col_chat:
             st.chat_message("user", avatar="👤").write(user_input)
             st.session_state.display_history.append({"role": "user", "content": user_input})
             
+            # --- Analysis Logic ---
             detect_sentiment(user_input)
-            sentiment_val = st.session_state.sentiment_counter.value
             
+            # Sentiment based instruction
+            sentiment_val = st.session_state.sentiment_counter.value
             system_instruction = ""
             if locked_mode == "Empathy Mode":
                 if sentiment_val <= -2:
@@ -441,4 +511,6 @@ with col_chat:
                     system_instruction = f"(System: User confident. Keep going.) "
             
             final_prompt = system_instruction + user_input
+            
+            # 调用处理函数（在这里计算响应时间和其他指标）
             handle_bot_response(final_prompt, chat_container, locked_mode)
