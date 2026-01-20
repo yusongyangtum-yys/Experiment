@@ -12,14 +12,26 @@ import uuid
 import hashlib
 import statistics
 
+# =========================================================
+# 🔴 关键修复 1：st.set_page_config 必须放在 Imports 之后的第一行
+# =========================================================
+st.set_page_config(page_title="Psychology Experiment", layout="wide", initial_sidebar_state="collapsed")
+
+# 隐藏侧边栏
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {display: none;}
+</style>
+""", unsafe_allow_html=True)
+
 # --- 1. Configuration ---
 
-api_key_chatbot = st.secrets["OPENAI_API_KEY"]
-
+# 异常处理：防止 Secrets 读取失败导致整个 App 崩溃
 try:
+    api_key_chatbot = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key_chatbot)
 except Exception as e:
-    st.error(f"Failed to initialize OpenAI Client: {e}")
+    st.error(f"System Error: Failed to initialize. Please refresh the page.")
     st.stop()
 
 MODEL = "gpt-4o-mini"
@@ -187,9 +199,6 @@ PHASE 3: FINAL EXAM
 # --- 2. Helper Functions ---
 
 def save_to_google_sheets(data_dict):
-    """
-    保存详细数据到 Google Sheets
-    """
     try:
         if "gcp_service_account" not in st.secrets:
             return False, "Error: 'gcp_service_account' not found in st.secrets."
@@ -207,7 +216,6 @@ def save_to_google_sheets(data_dict):
 
         worksheet = sh.sheet1
         
-        # 构建完整的数据行
         row = [
             str(data_dict.get("uuid")),
             str(data_dict.get("mode")),
@@ -271,7 +279,8 @@ def handle_bot_response(user_input, chat_container, active_mode):
 
     # --- Metric: User Word Count ---
     if user_input:
-        word_count = len(user_input.split())
+        # 修改为计算字符数以适应中文
+        word_count = len(user_input) 
         st.session_state.user_total_words += word_count
         st.session_state.messages.append({"role": "user", "content": user_input})
     
@@ -294,11 +303,21 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 return
 
             full_response = ""
-            for chunk in stream:
-                txt = chunk.choices[0].delta.content
-                if txt:
-                    full_response += txt
-                    chat_placeholder.markdown(full_response + "▌")
+            
+            # =========================================================
+            # 🔴 关键修复 2：流式输出防御性编程 (Socket Protection)
+            # =========================================================
+            try:
+                for chunk in stream:
+                    txt = chunk.choices[0].delta.content
+                    if txt:
+                        full_response += txt
+                        # 核心修改：这里如果 WebSocket 断了会报错，我们捕获它并停止循环
+                        chat_placeholder.markdown(full_response + "▌")
+            except Exception as e:
+                # 如果发生 WebSocketClosedError 或其他网络错误，不要崩溃
+                # 只是停止 UI 更新，但在后台保留已生成的文本
+                print(f"Stream interrupted: {e}")
             
             # --- Metric: Update Last Bot Finish Time ---
             st.session_state.last_bot_finish_time = datetime.datetime.now()
@@ -314,7 +333,11 @@ def handle_bot_response(user_input, chat_container, active_mode):
             elif "[INCORRECT]" in full_response:
                 clean_display_response = full_response.replace("[INCORRECT]", "").strip()
             
-            chat_placeholder.markdown(clean_display_response)
+            # 最后再尝试更新一次 UI（去除非 markdown 符号）
+            try:
+                chat_placeholder.markdown(clean_display_response)
+            except:
+                pass # 如果这时候断连了，就放弃更新UI，不影响数据保存逻辑
             
             st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
@@ -323,7 +346,6 @@ def handle_bot_response(user_input, chat_container, active_mode):
             response_lower = full_response.lower()
             if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
                 
-                # 1. 计算所有指标
                 final_score = st.session_state.correct_count
                 end_time = datetime.datetime.now()
                 start_time = st.session_state.session_start_time
@@ -346,7 +368,6 @@ def handle_bot_response(user_input, chat_container, active_mode):
 
                 st.info(f"📊 Final Score: {final_score}/10 | Time: {int(duration_seconds)}s")
                 
-                # 2. 准备数据字典
                 data_payload = {
                     "uuid": st.session_state.subject_id,
                     "mode": active_mode,
@@ -361,7 +382,6 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     "dialogue_json": dialogue_dump
                 }
                 
-                # 3. 保存
                 success, msg = save_to_google_sheets(data_payload)
                 
                 if success:
@@ -369,7 +389,7 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     st.balloons()
                     
                     # === Post-Survey Link Generation ===
-                    # 替换为你提供的 Post-Survey ID (entry.596968100)
+                    # 你的 POST ENTRY ID
                     POST_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSckI_yCbL5gQu6P7aP-9vRn5BKp7fX8NrBA_z3FmEegIggCTg/viewform"
                     POST_ENTRY_ID = "entry.596968100"
                     
@@ -394,17 +414,7 @@ def handle_bot_response(user_input, chat_container, active_mode):
 
 # --- 4. Initialization & Setup ---
 
-st.set_page_config(page_title="Psychology Experiment", layout="wide", initial_sidebar_state="collapsed")
-
-# 隐藏侧边栏
-st.markdown("""
-<style>
-    [data-testid="stSidebar"] {display: none;}
-</style>
-""", unsafe_allow_html=True)
-
 # --- ID生成与模式分配 ---
-
 if "subject_id" not in st.session_state:
     auto_id = str(uuid.uuid4())[:8]
     st.session_state.subject_id = f"SUB_{auto_id}"
@@ -414,7 +424,6 @@ if "pre_survey_completed" not in st.session_state:
     st.session_state.pre_survey_completed = False
 
 # --- Pre-Survey Link Construction ---
-# 替换为你提供的 Pre-Survey ID (entry.538559089)
 PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
 PRE_SURVEY_ENTRY_ID = "entry.538559089"
 
@@ -464,7 +473,6 @@ if not st.session_state.pre_survey_completed:
         st.info("👋 Welcome! Before we begin the session with the AI teacher, please complete a short survey.")
         st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-filled)")
         
-        # 按钮链接到 Pre-Survey
         st.markdown(f"""
         <a href="{pre_survey_url}" target="_blank" style="text-decoration:none;">
             <div style="
@@ -481,7 +489,6 @@ if not st.session_state.pre_survey_completed:
         
         st.write("---")
         
-        # 确认按钮
         if st.button("I have submitted the Pre-Survey"):
             st.session_state.pre_survey_completed = True
             st.rerun()
@@ -492,9 +499,9 @@ else:
 
     col_avatar, col_chat = st.columns([1, 2])
 
-        # --- 3D Model (Optimized) ---
-    # 使用 URL 直接加载，避免 Base64 导致 WebSocket 断连
-    # 请确保 GitHub 仓库是 Public (公开) 的，否则浏览器无法下载
+    # =========================================================
+    # 🔴 关键修复 3：使用 URL 方式加载模型，减轻 Socket 负担
+    # =========================================================
     MODEL_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
 
     html_code = f"""
@@ -533,7 +540,6 @@ else:
             
             if not has_assistant_reply:
                 st.session_state.messages.append({"role": "system", "content": trigger_msg})
-                # 这里调用一次，但不算用户时间
                 st.session_state.last_bot_finish_time = datetime.datetime.now() 
                 handle_bot_response("", chat_container, locked_mode)
                 st.rerun() 
@@ -546,10 +552,9 @@ else:
                 st.chat_message("user", avatar="👤").write(user_input)
                 st.session_state.display_history.append({"role": "user", "content": user_input})
                 
-                # --- Analysis Logic ---
+                # Analysis Logic
                 detect_sentiment(user_input)
                 
-                # Sentiment based instruction
                 sentiment_val = st.session_state.sentiment_counter.value
                 system_instruction = ""
                 if locked_mode == "Empathy Mode":
@@ -560,5 +565,4 @@ else:
                 
                 final_prompt = system_instruction + user_input
                 
-                # 调用处理函数
                 handle_bot_response(final_prompt, chat_container, locked_mode)
