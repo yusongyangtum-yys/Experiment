@@ -492,33 +492,29 @@ else:
 
     col_avatar, col_chat = st.columns([1, 2])
 
-    # 3D Model
-    YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
-    LOCAL_GLB_PATH = "cached_model.glb"
+        # --- 3D Model (Optimized) ---
+    # 使用 URL 直接加载，避免 Base64 导致 WebSocket 断连
+    # 请确保 GitHub 仓库是 Public (公开) 的，否则浏览器无法下载
+    MODEL_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
 
-    @st.cache_resource
-    def get_glb_base64(url, local_path):
-        if not os.path.exists(local_path):
-            try:
-                r = requests.get(url, stream=True)
-                with open(local_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-            except: return None
-        with open(local_path, "rb") as f:
-            return base64.b64encode(f.read()).decode('utf-8')
-
-    glb_data = get_glb_base64(YOUR_GLB_URL, LOCAL_GLB_PATH)
-    if glb_data:
-        src = f"data:model/gltf-binary;base64,{glb_data}"
-        html = f"""
-        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    html_code = f"""
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <div style="display: flex; justify-content: center; align-items: center; height: 520px; width: 100%;">
         <model-viewer 
-            src="{src}" camera-controls autoplay animation-name="*" shadow-intensity="1" 
-            style="width:100%;height:520px;" interaction-prompt="none"
+            src="{MODEL_URL}" 
+            camera-controls 
+            autoplay 
+            animation-name="*" 
+            shadow-intensity="1" 
+            style="width: 100%; height: 100%;" 
+            interaction-prompt="none"
+            loading="eager"
         ></model-viewer>
-        """
-        with col_avatar: 
-            components.html(html, height=540)
+    </div>
+    """
+    
+    with col_avatar: 
+        components.html(html_code, height=540)
 
     with col_chat:
         chat_container = st.container(height=520)
