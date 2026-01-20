@@ -14,6 +14,11 @@ import statistics
 
 # --- 1. Configuration ---
 
+# 确保 secrets 存在，否则给提示
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("Missing 'OPENAI_API_KEY' in st.secrets")
+    st.stop()
+
 api_key_chatbot = st.secrets["OPENAI_API_KEY"]
 
 try:
@@ -208,7 +213,6 @@ def save_to_google_sheets(data_dict):
         worksheet = sh.sheet1
         
         # 构建完整的数据行
-        # Schema: [UUID, Mode, StartTime, Duration(s), Score, Sentiment, WordCount, AvgRespTime, Turns, Confusion, Dialogue]
         row = [
             str(data_dict.get("uuid")),
             str(data_dict.get("mode")),
@@ -241,7 +245,7 @@ class SafeCounter:
     def reset(self): self.value = 0
 
 if "sentiment_counter" not in st.session_state: st.session_state.sentiment_counter = SafeCounter()
-if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0 # 记录困惑次数
+if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0 
 
 def detect_sentiment(user_message):
     """
@@ -274,9 +278,8 @@ def handle_bot_response(user_input, chat_container, active_mode):
     # --- Metric: User Response Time Logic ---
     current_time = datetime.datetime.now()
     if st.session_state.last_bot_finish_time:
-        # 计算从上一条Bot消息结束到现在的秒数
         time_diff = (current_time - st.session_state.last_bot_finish_time).total_seconds()
-        # 过滤掉异常长的时间（比如用户去吃了个饭，大于5分钟不计入平均）
+        # Filter abnormally long response times (e.g. > 5 mins)
         if time_diff < 300: 
             st.session_state.user_response_times.append(time_diff)
 
@@ -349,10 +352,10 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 else:
                     avg_resp_time = 0
                 
-                # 轮数 (Turn Count) - User messages count
+                # 轮数
                 turn_count = len([m for m in st.session_state.messages if m["role"] == "user"])
                 
-                # 困惑率 (Confusion Rate) = Confusion Count / Turn Count
+                # 困惑率
                 confusion_rate = 0
                 if turn_count > 0:
                     confusion_rate = st.session_state.confusion_counter / turn_count
@@ -383,6 +386,13 @@ def handle_bot_response(user_input, chat_container, active_mode):
                 if success:
                     st.success("✅ Experiment Complete. All metrics saved successfully.")
                     st.balloons()
+                    
+                    # 提示 Post-Survey (如果在 handle_bot_response 里无法直接访问全局变量，这里可能需要传入 url)
+                    # 不过为了保证代码运行，这里只显示提示
+                    st.write("---")
+                    st.markdown("### 📝 Next Step")
+                    st.write("Please ask the student to complete the **Post-Survey** now.")
+                    
                 else:
                     st.error(f"Save Failed: {msg}")
 
@@ -406,12 +416,14 @@ if "subject_id" not in st.session_state:
 # --- 状态控制 ---
 if "pre_survey_completed" not in st.session_state:
     st.session_state.pre_survey_completed = False
+if "auto_start_triggered" not in st.session_state:
+    st.session_state.auto_start_triggered = False
 
 # ==========================================
 # 【请在这里填入你刚才获取的 Entry ID】
 # ==========================================
-PRE_SURVEY_ENTRY_ID = "entry.538559089"   # <--- 请替换成 Pre-Survey 的 entry ID
-POST_SURVEY_ENTRY_ID = "entry.596968100"  # <--- 请替换成 Post-Survey 的 entry ID
+PRE_SURVEY_ENTRY_ID = "entry.123456789"   # <--- 请替换成 Pre-Survey 的 entry ID
+POST_SURVEY_ENTRY_ID = "entry.987654321"  # <--- 请替换成 Post-Survey 的 entry ID
 # ==========================================
 
 PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
@@ -492,33 +504,27 @@ else:
 
     col_avatar, col_chat = st.columns([1, 2])
 
-    # 3D Model
+    # -------------------------------------------------------------
+    # [FIX] 修复 WebSocket 崩溃：直接使用 URL 加载 3D 模型，不进行 Base64 转换
+    # -------------------------------------------------------------
     YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
-    LOCAL_GLB_PATH = "cached_model.glb"
 
-    @st.cache_resource
-    def get_glb_base64(url, local_path):
-        if not os.path.exists(local_path):
-            try:
-                r = requests.get(url, stream=True)
-                with open(local_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-            except: return None
-        with open(local_path, "rb") as f:
-            return base64.b64encode(f.read()).decode('utf-8')
-
-    glb_data = get_glb_base64(YOUR_GLB_URL, LOCAL_GLB_PATH)
-    if glb_data:
-        src = f"data:model/gltf-binary;base64,{glb_data}"
-        html = f"""
-        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-        <model-viewer 
-            src="{src}" camera-controls autoplay animation-name="*" shadow-intensity="1" 
-            style="width:100%;height:520px;" interaction-prompt="none"
-        ></model-viewer>
-        """
-        with col_avatar: 
-            components.html(html, height=540)
+    html = f"""
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <model-viewer 
+        src="{YOUR_GLB_URL}" 
+        camera-controls 
+        autoplay 
+        animation-name="*" 
+        shadow-intensity="1" 
+        style="width:100%;height:520px;" 
+        interaction-prompt="none"
+        alt="AI Teacher Avatar"
+    ></model-viewer>
+    """
+    with col_avatar: 
+        components.html(html, height=540)
+    # -------------------------------------------------------------
 
     with col_chat:
         chat_container = st.container(height=520)
@@ -530,16 +536,21 @@ else:
                 avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
                 st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
-        # 自动触发第一句话 (Auto Start)
+        # -------------------------------------------------------------
+        # [FIX] 自动触发逻辑：增加状态检查，防止死循环
+        # -------------------------------------------------------------
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             has_assistant_reply = any(m["role"] == "assistant" for m in st.session_state.messages)
             
-            if not has_assistant_reply:
+            # 只有当没有回复 且 还没有尝试触发过时才执行
+            if not has_assistant_reply and not st.session_state.auto_start_triggered:
+                st.session_state.auto_start_triggered = True # 立即标记为已触发
                 st.session_state.messages.append({"role": "system", "content": trigger_msg})
                 st.session_state.last_bot_finish_time = datetime.datetime.now() 
                 handle_bot_response("", chat_container, locked_mode)
                 st.rerun() 
+        # -------------------------------------------------------------
 
         # 用户输入
         user_input = st.chat_input("Type your response here...")
@@ -562,8 +573,4 @@ else:
                 
                 final_prompt = system_instruction + user_input
                 
-                # --- 这里为了传入 post_survey_url，我们需要稍微修改 handle_bot_response ---
-                # 为了不改动太多函数签名，我们在 handle_bot_response 内部直接读取全局变量 post_survey_url
-                # 或者更简单的：在这里修改 handle_bot_response 的定义
-                # 下面请看 Step 3 的微调
                 handle_bot_response(final_prompt, chat_container, locked_mode)
