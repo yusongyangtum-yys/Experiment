@@ -1,21 +1,18 @@
 import streamlit as st
 import os
 from openai import OpenAI
-import streamlit.components.v1 as components
-import requests
+import streamlit.components.v1 as components 
+import requests 
 import base64
 import json
 import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-import uuid
+import uuid 
 import hashlib
 import statistics
-import time
 
-# =========================================================
-# 1. Configuration
-# =========================================================
+# --- 1. Configuration ---
 
 api_key_chatbot = st.secrets["OPENAI_API_KEY"]
 
@@ -26,12 +23,11 @@ except Exception as e:
     st.stop()
 
 MODEL = "gpt-4o-mini"
-MAX_TOKENS = 800
-TEMPERATURE = 0.5
+MAX_TOKENS = 800 
+TEMPERATURE = 0.5   
 
-# =========================================================
-# 2. Prompts (UNCHANGED)
-# =========================================================
+# --- Prompt Definitions (UNCHANGED) ---
+
 SYSTEM_PROMPT_EMPATHY = """
 You are Sophia, a supportive, warm, and patient psychology teacher.
 
@@ -188,140 +184,254 @@ PHASE 3: FINAL EXAM
   - (Do not report the score yourself; the system will display the accurate count.)
 """
 
-
-# =========================================================
-# 3. Helper Functions (UNCHANGED)
-# =========================================================
+# --- 2. Helper Functions ---
 
 def save_to_google_sheets(data_dict):
+    """
+    保存详细数据到 Google Sheets
+    """
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        if "gcp_service_account" not in st.secrets:
+            return False, "Error: 'gcp_service_account' not found in st.secrets."
+        
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(credentials)
-        sh = gc.open(st.secrets["sheet_name"])
-        worksheet = sh.sheet1
+        
+        sheet_name = st.secrets.get("sheet_name", "Experiment_Data")
+        try:
+            sh = gc.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            return False, f"Error: Spreadsheet '{sheet_name}' not found."
 
+        worksheet = sh.sheet1
+        
+        # 构建完整的数据行
+        # Schema: [UUID, Mode, StartTime, Duration(s), Score, Sentiment, WordCount, AvgRespTime, Turns, Confusion, Dialogue]
         row = [
-            data_dict["uuid"], data_dict["mode"], data_dict["start_time"],
-            data_dict["duration"], data_dict["score"],
-            data_dict["sentiment_score"], data_dict["user_word_count"],
-            data_dict["avg_response_time"], data_dict["turn_count"],
-            data_dict["confusion_rate"], data_dict["dialogue_json"]
+            str(data_dict.get("uuid")),
+            str(data_dict.get("mode")),
+            str(data_dict.get("start_time")),
+            str(data_dict.get("duration")),
+            str(data_dict.get("score")),
+            str(data_dict.get("sentiment_score")),
+            str(data_dict.get("user_word_count")),
+            str(data_dict.get("avg_response_time")),
+            str(data_dict.get("turn_count")),
+            str(data_dict.get("confusion_rate")),
+            str(data_dict.get("dialogue_json"))
         ]
+        
         worksheet.append_row(row)
         return True, "Success"
     except Exception as e:
         return False, str(e)
 
-# =========================================================
-# 4. 🔧 MODIFIED: Stable Bot Response (NO STREAMING)
-# =========================================================
+POSITIVE_WORDS = ["good", "great", "excellent", "ready", "yes", "understand", "clear"]
+NEGATIVE_WORDS = ["bad", "hard", "don't understand", "no", "confused", "wait", "what?", "difficult"]
+
+class SafeCounter:
+    def __init__(self, min_val=-10, max_val=10):
+        self.value = 0
+        self.min_val = min_val
+        self.max_val = max_val
+    def increment(self): self.value = min(self.max_val, self.value + 1)
+    def decrement(self): self.value = max(self.min_val, self.value - 1)
+    def reset(self): self.value = 0
+
+if "sentiment_counter" not in st.session_state: st.session_state.sentiment_counter = SafeCounter()
+if "confusion_counter" not in st.session_state: st.session_state.confusion_counter = 0 # 记录困惑次数
+
+def detect_sentiment(user_message):
+    """
+    检测情感并统计困惑次数
+    """
+    msg = user_message.lower()
+    
+    # 情感计分
+    for w in POSITIVE_WORDS: 
+        if w in msg: st.session_state.sentiment_counter.increment()
+    
+    # 困惑与负面计分
+    is_confused = False
+    for w in NEGATIVE_WORDS: 
+        if w in msg: 
+            st.session_state.sentiment_counter.decrement()
+            is_confused = True
+            
+    if is_confused:
+        st.session_state.confusion_counter += 1
+
+def enforce_token_budget(messages):
+    if len(messages) > 60:
+        return [messages[0]] + messages[-58:]
+    return messages
+
+# --- 3. Logic ---
 
 def handle_bot_response(user_input, chat_container, active_mode):
+    # --- Metric: User Response Time Logic ---
     current_time = datetime.datetime.now()
     if st.session_state.last_bot_finish_time:
-        diff = (current_time - st.session_state.last_bot_finish_time).total_seconds()
-        if diff < 300:
-            st.session_state.user_response_times.append(diff)
+        # 计算从上一条Bot消息结束到现在的秒数
+        time_diff = (current_time - st.session_state.last_bot_finish_time).total_seconds()
+        # 过滤掉异常长的时间（比如用户去吃了个饭，大于5分钟不计入平均）
+        if time_diff < 300: 
+            st.session_state.user_response_times.append(time_diff)
 
+    # --- Metric: User Word Count ---
     if user_input:
-        st.session_state.user_total_words += len(user_input.split())
+        word_count = len(user_input.split())
+        st.session_state.user_total_words += word_count
         st.session_state.messages.append({"role": "user", "content": user_input})
-
+    
     with chat_container:
-        avatar = "👩‍🏫" if active_mode == "Empathy Mode" else "👨‍🏫"
-        with st.chat_message("assistant", avatar=avatar):
-            placeholder = st.empty()
-
-            # 🔧 MODIFIED: NO stream=True
+        bot_avatar = "👨‍🏫" if active_mode == "Neutral Mode" else "👩‍🏫"
+        
+        with st.chat_message("assistant", avatar=bot_avatar):
+            chat_placeholder = st.empty()
+            
             try:
-                resp = client.chat.completions.create(
+                stream = client.chat.completions.create(
                     model=MODEL,
-                    messages=st.session_state.messages[-60:],
+                    messages=enforce_token_budget(st.session_state.messages),
                     temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
-                    stream=False,
+                    stream=True,
                 )
             except Exception as e:
                 st.error(f"API Error: {e}")
                 return
 
-            full_response = resp.choices[0].message.content
-
-            # 🔧 Sentence-level "safe typing effect"
-            rendered = ""
-            for sentence in full_response.split(". "):
-                rendered += sentence.strip() + ". "
-                placeholder.markdown(rendered)
-                time.sleep(0.08)  # 微弱打字感，不触发 WS 问题
-
+            full_response = ""
+            for chunk in stream:
+                txt = chunk.choices[0].delta.content
+                if txt:
+                    full_response += txt
+                    chat_placeholder.markdown(full_response + "▌")
+            
+            # --- Metric: Update Last Bot Finish Time ---
             st.session_state.last_bot_finish_time = datetime.datetime.now()
 
-            clean = full_response
+            if "begin the final exam" in full_response.lower():
+                st.session_state.correct_count = 0
+
+            clean_display_response = full_response
+            
             if "[CORRECT]" in full_response:
                 st.session_state.correct_count += 1
-                clean = full_response.replace("[CORRECT]", "").strip()
+                clean_display_response = full_response.replace("[CORRECT]", "").strip()
             elif "[INCORRECT]" in full_response:
-                clean = full_response.replace("[INCORRECT]", "").strip()
-
-            placeholder.markdown(clean)
-
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            st.session_state.display_history.append({"role": "assistant", "content": clean})
-
-            # ===== Session End Logic (UNCHANGED) =====
-            if "the session is complete" in full_response.lower():
+                clean_display_response = full_response.replace("[INCORRECT]", "").strip()
+            
+            chat_placeholder.markdown(clean_display_response)
+            
+            st.session_state.messages.append({"role": "assistant", "content": full_response}) 
+            st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
+            
+            # --- 结算逻辑 ---
+            response_lower = full_response.lower()
+            if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
+                
+                # 1. 计算所有指标
+                final_score = st.session_state.correct_count
                 end_time = datetime.datetime.now()
-                duration = (end_time - st.session_state.session_start_time).total_seconds()
-
+                start_time = st.session_state.session_start_time
+                duration_seconds = (end_time - start_time).total_seconds()
+                
+                # 情感分
+                sentiment_val = st.session_state.sentiment_counter.value
+                
+                # 平均响应时间
+                if len(st.session_state.user_response_times) > 0:
+                    avg_resp_time = statistics.mean(st.session_state.user_response_times)
+                else:
+                    avg_resp_time = 0
+                
+                # 轮数 (Turn Count) - User messages count
                 turn_count = len([m for m in st.session_state.messages if m["role"] == "user"])
-                avg_resp = statistics.mean(st.session_state.user_response_times) if st.session_state.user_response_times else 0
-                confusion_rate = st.session_state.confusion_counter / turn_count if turn_count else 0
+                
+                # 困惑率 (Confusion Rate) = Confusion Count / Turn Count
+                confusion_rate = 0
+                if turn_count > 0:
+                    confusion_rate = st.session_state.confusion_counter / turn_count
+                
+                # 完整对话 JSON
+                dialogue_dump = json.dumps(st.session_state.messages, ensure_ascii=False)
 
-                payload = {
+                st.info(f"📊 Final Score: {final_score}/10 | Time: {int(duration_seconds)}s")
+                
+                # 2. 准备数据字典
+                data_payload = {
                     "uuid": st.session_state.subject_id,
                     "mode": active_mode,
-                    "start_time": st.session_state.session_start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "duration": int(duration),
-                    "score": st.session_state.correct_count,
-                    "sentiment_score": st.session_state.sentiment_counter.value,
+                    "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": int(duration_seconds),
+                    "score": final_score,
+                    "sentiment_score": sentiment_val,
                     "user_word_count": st.session_state.user_total_words,
-                    "avg_response_time": round(avg_resp, 2),
+                    "avg_response_time": round(avg_resp_time, 2),
                     "turn_count": turn_count,
                     "confusion_rate": round(confusion_rate, 2),
-                    "dialogue_json": json.dumps(st.session_state.messages, ensure_ascii=False)
+                    "dialogue_json": dialogue_dump
                 }
-
-                success, msg = save_to_google_sheets(payload)
+                
+                # 3. 保存
+                success, msg = save_to_google_sheets(data_payload)
+                
                 if success:
-                    st.success("✅ Experiment completed and saved.")
+                    st.success("✅ Experiment Complete. All metrics saved successfully.")
+                    st.balloons()
                 else:
-                    st.error(f"Save failed: {msg}")
+                    st.error(f"Save Failed: {msg}")
 
-# =========================================================
-# 5. UI & State Init (UNCHANGED except comments)
-# =========================================================
+# --- 4. Initialization & Setup ---
 
-st.set_page_config(page_title="Psychology Experiment", layout="wide")
+st.set_page_config(page_title="Psychology Experiment", layout="wide", initial_sidebar_state="collapsed")
+
+# 隐藏侧边栏
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {display: none;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- ID生成与模式分配 ---
 
 if "subject_id" not in st.session_state:
-    st.session_state.subject_id = f"SUB_{uuid.uuid4().hex[:8]}"
+    auto_id = str(uuid.uuid4())[:8]
+    st.session_state.subject_id = f"SUB_{auto_id}"
 
+# --- 状态控制 ---
+if "pre_survey_completed" not in st.session_state:
+    st.session_state.pre_survey_completed = False
+
+# ==========================================
+# 【请在这里填入你刚才获取的 Entry ID】
+# ==========================================
+PRE_SURVEY_ENTRY_ID = "entry.538559089"   # <--- 请替换成 Pre-Survey 的 entry ID
+POST_SURVEY_ENTRY_ID = "entry.596968100"  # <--- 请替换成 Post-Survey 的 entry ID
+# ==========================================
+
+PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
+POST_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSckI_yCbL5gQu6P7aP-9vRn5BKp7fX8NrBA_z3FmEegIggCTg/viewform"
+
+# 构建自动填充 ID 的链接
+pre_survey_url = f"{PRE_SURVEY_BASE}?usp=pp_url&{PRE_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
+post_survey_url = f"{POST_SURVEY_BASE}?usp=pp_url&{POST_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
+
+if "active_mode" not in st.session_state:
+    hash_object = hashlib.md5(st.session_state.subject_id.encode())
+    hash_int = int(hash_object.hexdigest(), 16)
+    if hash_int % 2 == 0:
+        st.session_state.active_mode = "Empathy Mode"
+    else:
+        st.session_state.active_mode = "Neutral Mode"
+
+# --- Metrics Initialization ---
 if "session_start_time" not in st.session_state:
     st.session_state.session_start_time = datetime.datetime.now()
-
-if "messages" not in st.session_state:
-    st.session_state.messages = [{
-        "role": "system",
-        "content": SYSTEM_PROMPT_EMPATHY
-    }]
-
-if "display_history" not in st.session_state:
-    st.session_state.display_history = []
-
-if "correct_count" not in st.session_state:
-    st.session_state.correct_count = 0
 
 if "user_response_times" not in st.session_state:
     st.session_state.user_response_times = []
@@ -332,28 +442,128 @@ if "last_bot_finish_time" not in st.session_state:
 if "user_total_words" not in st.session_state:
     st.session_state.user_total_words = 0
 
-# =========================================================
-# 6. Main UI
-# =========================================================
+# --- System Prompt Init ---
+if "messages" not in st.session_state:
+    prompt = SYSTEM_PROMPT_EMPATHY if st.session_state.active_mode == "Empathy Mode" else SYSTEM_PROMPT_NEUTRAL
+    st.session_state.messages = [{"role": "system", "content": prompt}]
 
-st.title("🧠 Psychology Learning Session")
+if "display_history" not in st.session_state:
+    st.session_state.display_history = []
+if "correct_count" not in st.session_state:
+    st.session_state.correct_count = 0
 
-col_avatar, col_chat = st.columns([1, 2])
+# --- 5. Main UI Logic ---
 
-with col_avatar:
-    components.html("""
-    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-    <model-viewer src="https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
-        camera-controls autoplay style="width:100%;height:520px;"></model-viewer>
-    """, height=540)
+# 【逻辑分支 1：如果没做完 Pre-Survey，显示引导页】
+if not st.session_state.pre_survey_completed:
+    st.container().markdown("<br><br>", unsafe_allow_html=True) # Spacer
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.title("🎓 Psychology Learning Experiment")
+        st.info("👋 Welcome! Before we begin the session with the AI teacher, please complete a short survey.")
+        st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-filled)")
+        
+        # 按钮链接到 Pre-Survey
+        st.markdown(f"""
+        <a href="{pre_survey_url}" target="_blank" style="text-decoration:none;">
+            <div style="
+                background-color: #4CAF50; color: white; padding: 20px; text-align: center;
+                border-radius: 8px; font-size: 18px; margin: 20px 0; font-weight: bold;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                👉 Click Here to Start Pre-Survey
+            </div>
+        </a>
+        """, unsafe_allow_html=True)
+        
+        st.warning("⚠️ Please keep this tab open. After submitting the Google Form, return here and click the button below.")
+        
+        st.write("---")
+        
+        # 确认按钮
+        if st.button("I have submitted the Pre-Survey"):
+            st.session_state.pre_survey_completed = True
+            st.rerun()
 
-with col_chat:
-    chat_container = st.container(height=520)
+# 【逻辑分支 2：Avatar 互动环节】
+else:
+    st.title("🧠 Psychology Learning Session")
 
-    for msg in st.session_state.display_history:
-        st.chat_message(msg["role"]).write(msg["content"])
+    col_avatar, col_chat = st.columns([1, 2])
 
-    user_input = st.chat_input("Type your response here...")
-    if user_input:
-        st.chat_message("user").write(user_input)
-        handle_bot_response(user_input, chat_container, "Empathy Mode")
+    # 3D Model
+    YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
+    LOCAL_GLB_PATH = "cached_model.glb"
+
+    @st.cache_resource
+    def get_glb_base64(url, local_path):
+        if not os.path.exists(local_path):
+            try:
+                r = requests.get(url, stream=True)
+                with open(local_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
+            except: return None
+        with open(local_path, "rb") as f:
+            return base64.b64encode(f.read()).decode('utf-8')
+
+    glb_data = get_glb_base64(YOUR_GLB_URL, LOCAL_GLB_PATH)
+    if glb_data:
+        src = f"data:model/gltf-binary;base64,{glb_data}"
+        html = f"""
+        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+        <model-viewer 
+            src="{src}" camera-controls autoplay animation-name="*" shadow-intensity="1" 
+            style="width:100%;height:520px;" interaction-prompt="none"
+        ></model-viewer>
+        """
+        with col_avatar: 
+            components.html(html, height=540)
+
+    with col_chat:
+        chat_container = st.container(height=520)
+        locked_mode = st.session_state.active_mode
+
+        # 显示历史记录
+        with chat_container:
+            for msg in st.session_state.display_history:
+                avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
+                st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
+
+        # 自动触发第一句话 (Auto Start)
+        if len(st.session_state.display_history) == 0:
+            trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
+            has_assistant_reply = any(m["role"] == "assistant" for m in st.session_state.messages)
+            
+            if not has_assistant_reply:
+                st.session_state.messages.append({"role": "system", "content": trigger_msg})
+                st.session_state.last_bot_finish_time = datetime.datetime.now() 
+                handle_bot_response("", chat_container, locked_mode)
+                st.rerun() 
+
+        # 用户输入
+        user_input = st.chat_input("Type your response here...")
+        
+        if user_input:
+            with chat_container:
+                st.chat_message("user", avatar="👤").write(user_input)
+                st.session_state.display_history.append({"role": "user", "content": user_input})
+                
+                # Analysis Logic
+                detect_sentiment(user_input)
+                
+                sentiment_val = st.session_state.sentiment_counter.value
+                system_instruction = ""
+                if locked_mode == "Empathy Mode":
+                    if sentiment_val <= -2:
+                        system_instruction = f"(System: User discouraged (Score {sentiment_val}). Be extra encouraging!) "
+                    elif sentiment_val >= 2:
+                        system_instruction = f"(System: User confident. Keep going.) "
+                
+                final_prompt = system_instruction + user_input
+                
+                # --- 这里为了传入 post_survey_url，我们需要稍微修改 handle_bot_response ---
+                # 为了不改动太多函数签名，我们在 handle_bot_response 内部直接读取全局变量 post_survey_url
+                # 或者更简单的：在这里修改 handle_bot_response 的定义
+                # 下面请看 Step 3 的微调
+                handle_bot_response(final_prompt, chat_container, locked_mode)
