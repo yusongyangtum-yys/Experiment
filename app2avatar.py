@@ -422,8 +422,8 @@ if "auto_start_triggered" not in st.session_state:
 # ==========================================
 # 【请在这里填入你刚才获取的 Entry ID】
 # ==========================================
-PRE_SURVEY_ENTRY_ID = "entry.123456789"   # <--- 请替换成 Pre-Survey 的 entry ID
-POST_SURVEY_ENTRY_ID = "entry.987654321"  # <--- 请替换成 Post-Survey 的 entry ID
+PRE_SURVEY_ENTRY_ID = "entry.538559089"   # <--- 请替换成 Pre-Survey 的 entry ID
+POST_SURVEY_ENTRY_ID = "entry.596968110"  # <--- 请替换成 Post-Survey 的 entry ID
 # ==========================================
 
 PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
