@@ -507,8 +507,8 @@ else:
     # -------------------------------------------------------------
     # [FIX] 修复 WebSocket 崩溃：直接使用 URL 加载 3D 模型，不进行 Base64 转换
     # -------------------------------------------------------------
-    CDN_GLB_URL = "https://cdn.jsdelivr.net/gh/yusongyangtum-yys/Avatar@avatar/GLB.glb"
-    
+    NEW_MODEL_URL = "https://huggingface.co/Giillm/Avatar/resolve/main/GLB.glb?download=true" 
+
     html = f"""
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
     <div style="
@@ -521,7 +521,7 @@ else:
         border: 1px solid #e0e0e0;
     ">
         <model-viewer 
-            src="{CDN_GLB_URL}" 
+            src="{NEW_MODEL_URL}" 
             camera-controls 
             autoplay 
             animation-name="*" 
@@ -542,7 +542,7 @@ else:
             ">
                 <div style="font-size: 40px;">⏳</div>
                 <div style="margin-top: 10px; font-weight: bold;">Loading AI Teacher...</div>
-                <div style="font-size: 12px; color: #888; margin-top: 5px;">(Large file: 34MB, please wait)</div>
+                <div style="font-size: 12px; color: #888; margin-top: 5px;">(Large file downloading, please wait...)</div>
             </div>
         </model-viewer>
     </div>
