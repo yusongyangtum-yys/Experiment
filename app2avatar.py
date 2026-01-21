@@ -507,20 +507,45 @@ else:
     # -------------------------------------------------------------
     # [FIX] 修复 WebSocket 崩溃：直接使用 URL 加载 3D 模型，不进行 Base64 转换
     # -------------------------------------------------------------
-    YOUR_GLB_URL = "https://github.com/yusongyangtum-yys/Avatar/releases/download/avatar/GLB.glb"
-
+    CDN_GLB_URL = "https://cdn.jsdelivr.net/gh/yusongyangtum-yys/Avatar@avatar/GLB.glb"
+    
     html = f"""
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-    <model-viewer 
-        src="{YOUR_GLB_URL}" 
-        camera-controls 
-        autoplay 
-        animation-name="*" 
-        shadow-intensity="1" 
-        style="width:100%;height:520px;" 
-        interaction-prompt="none"
-        alt="AI Teacher Avatar"
-    ></model-viewer>
+    <div style="
+        display: flex; 
+        justify-content: center; 
+        align-items: center; 
+        height: 540px; 
+        background-color: #f0f2f6; 
+        border-radius: 10px; 
+        border: 1px solid #e0e0e0;
+    ">
+        <model-viewer 
+            src="{CDN_GLB_URL}" 
+            camera-controls 
+            autoplay 
+            animation-name="*" 
+            shadow-intensity="1" 
+            style="width:100%; height:100%;" 
+            interaction-prompt="none"
+            loading="eager" 
+            alt="AI Teacher Avatar"
+        >
+            <div slot="poster" style="
+                display: flex; 
+                justify-content: center; 
+                align-items: center; 
+                height: 100%; 
+                color: #555; 
+                font-family: sans-serif;
+                flex-direction: column;
+            ">
+                <div style="font-size: 40px;">⏳</div>
+                <div style="margin-top: 10px; font-weight: bold;">Loading AI Teacher...</div>
+                <div style="font-size: 12px; color: #888; margin-top: 5px;">(Large file: 34MB, please wait)</div>
+            </div>
+        </model-viewer>
+    </div>
     """
     with col_avatar: 
         components.html(html, height=540)
