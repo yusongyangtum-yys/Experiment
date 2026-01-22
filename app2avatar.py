@@ -295,25 +295,32 @@ def handle_bot_response(user_input, chat_container, active_mode):
         with st.chat_message("assistant", avatar=bot_avatar):
             chat_placeholder = st.empty()
             
-            try:
-                stream = client.chat.completions.create(
-                    model=MODEL,
-                    messages=enforce_token_budget(st.session_state.messages),
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS,
-                    stream=True,
-                )
-            except Exception as e:
-                st.error(f"API Error: {e}")
-                return
-
             full_response = ""
-            for chunk in stream:
-                txt = chunk.choices[0].delta.content
-                if txt:
-                    full_response += txt
-                    chat_placeholder.markdown(full_response + "▌")
             
+            # 【DEV FEATURE】: 开发者跳过机制
+            if user_input.strip() == "/dev_skip":
+                full_response = "The session is complete. Score: 10/10."
+                chat_placeholder.markdown(full_response)
+                # 模拟正确数以用于测试
+                st.session_state.correct_count = 10
+            else:
+                try:
+                    stream = client.chat.completions.create(
+                        model=MODEL,
+                        messages=enforce_token_budget(st.session_state.messages),
+                        temperature=TEMPERATURE,
+                        max_tokens=MAX_TOKENS,
+                        stream=True,
+                    )
+                    for chunk in stream:
+                        txt = chunk.choices[0].delta.content
+                        if txt:
+                            full_response += txt
+                            chat_placeholder.markdown(full_response + "▌")
+                except Exception as e:
+                    st.error(f"API Error: {e}")
+                    return
+
             # --- Metric: Update Last Bot Finish Time ---
             st.session_state.last_bot_finish_time = datetime.datetime.now()
 
@@ -328,13 +335,16 @@ def handle_bot_response(user_input, chat_container, active_mode):
             elif "[INCORRECT]" in full_response:
                 clean_display_response = full_response.replace("[INCORRECT]", "").strip()
             
-            chat_placeholder.markdown(clean_display_response)
+            # 如果不是跳过模式，重新渲染去掉了光标的内容
+            if user_input.strip() != "/dev_skip":
+                chat_placeholder.markdown(clean_display_response)
             
             st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
             
             # --- 结算逻辑 ---
             response_lower = full_response.lower()
+            # 兼容 "session is complete" 或者 "/dev_skip" 强制生成的 Score 文本
             if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
                 
                 # 1. 计算所有指标
@@ -387,11 +397,20 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     st.success("✅ Experiment Complete. All metrics saved successfully.")
                     st.balloons()
                     
-                    # 提示 Post-Survey (如果在 handle_bot_response 里无法直接访问全局变量，这里可能需要传入 url)
-                    # 不过为了保证代码运行，这里只显示提示
-                    st.write("---")
-                    st.markdown("### 📝 Next Step")
-                    st.write("Please ask the student to complete the **Post-Survey** now.")
+                    # 【POST-SURVEY BUTTON】: 显示跳转按钮
+                    target_url = st.session_state.get("post_survey_url", "#")
+                    st.markdown("---")
+                    st.markdown(f"""
+                    <a href="{target_url}" target="_blank" style="text-decoration:none;">
+                        <div style="
+                            background-color: #FF5722; color: white; padding: 16px; text-align: center;
+                            border-radius: 8px; font-size: 18px; margin: 10px 0; font-weight: bold;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        ">
+                            📋 Click Here to Start Post-Survey
+                        </div>
+                    </a>
+                    """, unsafe_allow_html=True)
                     
                 else:
                     st.error(f"Save Failed: {msg}")
@@ -432,6 +451,9 @@ POST_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSckI_yCbL5gQu6P7aP-
 # 构建自动填充 ID 的链接
 pre_survey_url = f"{PRE_SURVEY_BASE}?usp=pp_url&{PRE_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
 post_survey_url = f"{POST_SURVEY_BASE}?usp=pp_url&{POST_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
+
+# [ADD THIS LINE] 保存到 session_state 供 handle_bot_response 使用
+st.session_state.post_survey_url = post_survey_url 
 
 if "active_mode" not in st.session_state:
     hash_object = hashlib.md5(st.session_state.subject_id.encode())
