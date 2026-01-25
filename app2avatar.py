@@ -511,7 +511,7 @@ if not st.session_state.pre_survey_completed:
         </a>
         """, unsafe_allow_html=True)
         
-        st.warning("⚠️ Please keep this tab open. After submitting the Google Form, return here and click the button below.")
+        st.warning("⚠️ Please keep this tab open. After submitting the Google Form, return here and click the button below. And please keep all the pages open during the whole experiment.")
         
         st.write("---")
         
