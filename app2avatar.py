@@ -14,7 +14,7 @@ import statistics
 
 # --- 1. Configuration ---
 
-# Ensure secrets exist, otherwise show an error prompt
+# 确保 secrets 存在，否则给提示
 if "OPENAI_API_KEY" not in st.secrets:
     st.error("Missing 'OPENAI_API_KEY' in st.secrets")
     st.stop()
@@ -193,7 +193,7 @@ PHASE 3: FINAL EXAM
 
 def save_to_google_sheets(data_dict):
     """
-    Save detailed data to Google Sheets
+    保存详细数据到 Google Sheets
     """
     try:
         if "gcp_service_account" not in st.secrets:
@@ -212,7 +212,7 @@ def save_to_google_sheets(data_dict):
 
         worksheet = sh.sheet1
         
-        # Construct the complete data row
+        # 构建完整的数据行
         row = [
             str(data_dict.get("uuid")),
             str(data_dict.get("mode")),
@@ -249,15 +249,15 @@ if "confusion_counter" not in st.session_state: st.session_state.confusion_count
 
 def detect_sentiment(user_message):
     """
-    Detect sentiment and count the number of times confused
+    检测情感并统计困惑次数
     """
     msg = user_message.lower()
     
-    # Sentiment scoring
+    # 情感计分
     for w in POSITIVE_WORDS: 
         if w in msg: st.session_state.sentiment_counter.increment()
     
-    # Confusion and negative scoring
+    # 困惑与负面计分
     is_confused = False
     for w in NEGATIVE_WORDS: 
         if w in msg: 
@@ -297,11 +297,11 @@ def handle_bot_response(user_input, chat_container, active_mode):
             
             full_response = ""
             
-            # [DEV FEATURE]: Developer skip mechanism
+            # 【DEV FEATURE】: 开发者跳过机制
             if user_input.strip() == "/dev_skip":
                 full_response = "The session is complete. Score: 10/10."
                 chat_placeholder.markdown(full_response)
-                # Simulate the correct count for testing
+                # 模拟正确数以用于测试
                 st.session_state.correct_count = 10
             else:
                 try:
@@ -335,47 +335,47 @@ def handle_bot_response(user_input, chat_container, active_mode):
             elif "[INCORRECT]" in full_response:
                 clean_display_response = full_response.replace("[INCORRECT]", "").strip()
             
-            # If not in skip mode, re-render the content without the cursor
+            # 如果不是跳过模式，重新渲染去掉了光标的内容
             if user_input.strip() != "/dev_skip":
                 chat_placeholder.markdown(clean_display_response)
             
             st.session_state.messages.append({"role": "assistant", "content": full_response}) 
             st.session_state.display_history.append({"role": "assistant", "content": clean_display_response})
             
-            # --- Finalization Logic ---
+            # --- 结算逻辑 ---
             response_lower = full_response.lower()
-            # Compatible with "session is complete" or the Score text forced by "/dev_skip"
+            # 兼容 "session is complete" 或者 "/dev_skip" 强制生成的 Score 文本
             if ("session" in response_lower and "complete" in response_lower) or ("score" in response_lower and "10" in response_lower):
                 
-                # 1. Calculate all metrics
+                # 1. 计算所有指标
                 final_score = st.session_state.correct_count
                 end_time = datetime.datetime.now()
                 start_time = st.session_state.session_start_time
                 duration_seconds = (end_time - start_time).total_seconds()
                 
-                # Sentiment score
+                # 情感分
                 sentiment_val = st.session_state.sentiment_counter.value
                 
-                # Average response time
+                # 平均响应时间
                 if len(st.session_state.user_response_times) > 0:
                     avg_resp_time = statistics.mean(st.session_state.user_response_times)
                 else:
                     avg_resp_time = 0
                 
-                # Number of turns
+                # 轮数
                 turn_count = len([m for m in st.session_state.messages if m["role"] == "user"])
                 
-                # Confusion rate
+                # 困惑率
                 confusion_rate = 0
                 if turn_count > 0:
                     confusion_rate = st.session_state.confusion_counter / turn_count
                 
-                # Full dialogue JSON
+                # 完整对话 JSON
                 dialogue_dump = json.dumps(st.session_state.messages, ensure_ascii=False)
 
                 st.info(f"📊 Final Score: {final_score}/10 | Time: {int(duration_seconds)}s")
                 
-                # 2. Prepare data dictionary
+                # 2. 准备数据字典
                 data_payload = {
                     "uuid": st.session_state.subject_id,
                     "mode": active_mode,
@@ -390,28 +390,12 @@ def handle_bot_response(user_input, chat_container, active_mode):
                     "dialogue_json": dialogue_dump
                 }
                 
-                # 3. Save
+                # 3. 保存
                 success, msg = save_to_google_sheets(data_payload)
                 
                 if success:
-                    st.success("✅ Experiment Complete. All metrics saved successfully.")
+                    st.success("✅ Session Complete. All metrics saved successfully.")
                     st.balloons()
-                    
-                    # [Backend Fix Focus]: Get the locked URL directly from session_state
-                    target_url = st.session_state.get("post_survey_url", "#")
-                    st.markdown("---")
-                    st.markdown(f"""
-                    <a href="{target_url}" target="_blank" style="text-decoration:none;">
-                        <div style="
-                            background-color: #FF5722; color: white; padding: 16px; text-align: center;
-                            border-radius: 8px; font-size: 18px; margin: 10px 0; font-weight: bold;
-                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                        ">
-                            📋 Click Here to Start Post-Survey
-                        </div>
-                    </a>
-                    """, unsafe_allow_html=True)
-                    
                 else:
                     st.error(f"Save Failed: {msg}")
 
@@ -419,34 +403,23 @@ def handle_bot_response(user_input, chat_container, active_mode):
 
 st.set_page_config(page_title="Psychology Experiment", layout="wide", initial_sidebar_state="collapsed")
 
-# Hide sidebar
+# 隐藏侧边栏
 st.markdown("""
 <style>
     [data-testid="stSidebar"] {display: none;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- ID Generation and Mode Assignment ---
+# --- ID生成与模式分配 ---
 
-# [Backend Fix Focus]: ID generation and forced atomic locking of URLs
 if "subject_id" not in st.session_state:
     auto_id = str(uuid.uuid4())[:8]
     st.session_state.subject_id = f"SUB_{auto_id}"
-    
-    # Updated Entry ID and Base URL
-    PRE_SURVEY_ENTRY_ID = "entry.538559089"   
-    POST_SURVEY_ENTRY_ID = "entry.596968100"  # <--- Updated to the latest ID
-    
-    PRE_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSdqNQ8oRvM-kxVTitRXCtGRuQg_oopmegL-koixLQxJVVjayA/viewform"
-    POST_SURVEY_BASE = "https://docs.google.com/forms/d/e/1FAIpQLSckI_yCbL5gQu6P7aP-9vRn5BKp7fX8NrBA_z3FmEegIggCTg/viewform"
 
-    # Permanently store the generated URL in session_state
-    st.session_state.pre_survey_url = f"{PRE_SURVEY_BASE}?usp=pp_url&{PRE_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
-    st.session_state.post_survey_url = f"{POST_SURVEY_BASE}?usp=pp_url&{POST_SURVEY_ENTRY_ID}={st.session_state.subject_id}"
+# --- 状态控制 ---
+if "session_started" not in st.session_state:
+    st.session_state.session_started = False
 
-# --- State Control ---
-if "pre_survey_completed" not in st.session_state:
-    st.session_state.pre_survey_completed = False
 if "auto_start_triggered" not in st.session_state:
     st.session_state.auto_start_triggered = False
 
@@ -483,47 +456,32 @@ if "correct_count" not in st.session_state:
 
 # --- 5. Main UI Logic ---
 
-# [Logic Branch 1: If Pre-Survey is not completed, show the landing page]
-if not st.session_state.pre_survey_completed:
+# 【逻辑分支 1：引导页（去掉了调查问卷，换为直接开始按钮）】
+if not st.session_state.session_started:
     st.container().markdown("<br><br>", unsafe_allow_html=True) # Spacer
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.title("🎓 Psychology Learning Experiment")
-        st.info("👋 Welcome! Before we begin the session with the AI teacher, please complete a short survey.")
-        st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-filled)")
+        st.title("🎓 Psychology Learning Session")
+        st.info("👋 Welcome! You are about to begin a 1-on-1 session with our AI psychology teacher. Please ensure you have enough time to complete the session in one sitting.")
         
-        # Fix: Get the locked pre-survey link directly from session_state
-        pre_url = st.session_state.pre_survey_url
-        st.markdown(f"""
-        <a href="{pre_url}" target="_blank" style="text-decoration:none;">
-            <div style="
-                background-color: #4CAF50; color: white; padding: 20px; text-align: center;
-                border-radius: 8px; font-size: 18px; margin: 20px 0; font-weight: bold;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            ">
-                👉 Click Here to Start Pre-Survey
-            </div>
-        </a>
-        """, unsafe_allow_html=True)
-        
-        st.warning("⚠️ Please keep this tab open. After submitting the Google Form, return here and click the button below. And please keep all the pages open during the whole experiment.")
+        st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-generated)")
         
         st.write("---")
         
-        # Confirmation button
-        if st.button("I have submitted the Pre-Survey"):
-            st.session_state.pre_survey_completed = True
+        # 简洁清晰的开始按钮
+        if st.button("🚀 Start the Learning Session", type="primary", use_container_width=True):
+            st.session_state.session_started = True
             st.rerun()
 
-# [Logic Branch 2: Avatar Interaction Phase]
+# 【逻辑分支 2：Avatar 互动环节】
 else:
     st.title("🧠 Psychology Learning Session")
 
     col_avatar, col_chat = st.columns([1, 2])
 
     # -------------------------------------------------------------
-    # [FIX] Fix WebSocket crash: Load 3D model directly using URL
+    # 3D Avatar Model
     # -------------------------------------------------------------
     NEW_MODEL_URL = "https://huggingface.co/Giillm/Avatar/resolve/main/GLB.glb?download=true" 
 
@@ -572,13 +530,13 @@ else:
         chat_container = st.container(height=520)
         locked_mode = st.session_state.active_mode
 
-        # Display chat history
+        # 显示历史记录
         with chat_container:
             for msg in st.session_state.display_history:
                 avatar = "👩‍🏫" if msg["role"] == "assistant" and locked_mode == "Empathy Mode" else ("👨‍🏫" if msg["role"] == "assistant" else "👤")
                 st.chat_message(msg["role"], avatar=avatar).write(msg["content"])
 
-        # Auto-trigger logic
+        # 自动触发逻辑
         if len(st.session_state.display_history) == 0:
             trigger_msg = "The student has logged in. Please start Phase 1: Introduction now."
             has_assistant_reply = any(m["role"] == "assistant" for m in st.session_state.messages)
@@ -590,7 +548,7 @@ else:
                 handle_bot_response("", chat_container, locked_mode)
                 st.rerun() 
 
-        # User input
+        # 用户输入
         user_input = st.chat_input("Type your response here...")
         
         if user_input:
