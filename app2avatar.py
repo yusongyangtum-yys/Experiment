@@ -462,7 +462,7 @@ if not st.session_state.session_started:
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.title("🎓 Psychology Learning Session")
+        st.title("🎓 Psychology Learning Classes")
         st.info("👋 Welcome! You are about to begin a 1-on-1 session with our AI psychology teacher. Please ensure you have enough time to complete the session in one sitting.")
         
         st.write(f"**Your Participant ID:** `{st.session_state.subject_id}` (Auto-generated)")
